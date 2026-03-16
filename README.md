@@ -2,6 +2,10 @@
 
 A RESTful API for academic paper search, supporting semantic retrieval, title matching, paper metadata lookup, and citation graph queries. Covers ~3M arXiv papers.
 
+## Attention!
+
+For internal network testing: 172.16.100.204
+
 ## Quick Start
 
 **Search papers**

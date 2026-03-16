@@ -22,8 +22,45 @@
 | 项目 | 说明 |
 |------|------|
 | **Base URL** | `http://210.45.70.162:4000` |
-| **认证** | 当前版本无需认证 |
+| **认证** | 需要 API Key（见下方认证说明） |
 | **Content-Type** | `application/json` |
+
+### 2.1 认证
+
+所有 `/paper/*` 接口需要通过 API Key 认证。通过以下方式之一传递：
+
+**方式一：请求头（推荐）**
+
+```bash
+curl -H "X-API-Key: lw-your-api-key" "http://210.45.70.162:4000/paper/search?query=transformer"
+```
+
+**方式二：查询参数**
+
+```bash
+curl "http://210.45.70.162:4000/paper/search?query=transformer&apiKey=lw-your-api-key"
+```
+
+**Python 示例**
+
+```python
+import requests
+
+headers = {"X-API-Key": "lw-your-api-key"}
+r = requests.get("http://210.45.70.162:4000/paper/search",
+                  params={"query": "transformer"},
+                  headers=headers)
+print(r.json())
+```
+
+如需申请 API Key，请通过邮件联系我们。
+
+**认证错误响应**
+
+| HTTP 状态码 | 说明 |
+|-------------|------|
+| 401 | 未提供 API Key |
+| 403 | API Key 无效或已被禁用 |
 
 ---
 
@@ -436,6 +473,8 @@ print(r.json())
 | HTTP 状态码 | 说明 |
 |-------------|------|
 | 200 | 成功 |
+| 401 | 未提供 API Key |
+| 403 | API Key 无效或已被禁用 |
 | 404 | 资源不存在（如论文未找到） |
 | 422 | 参数校验失败（如 limit 超出范围） |
 | 500 | 服务端错误 |

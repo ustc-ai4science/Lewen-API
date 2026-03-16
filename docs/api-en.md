@@ -22,8 +22,45 @@ All endpoints return JSON.
 | Item | Description |
 |------|-------------|
 | **Base URL** | `http://210.45.70.162:4000` |
-| **Authentication** | None required in current version |
+| **Authentication** | API Key required (see below) |
 | **Content-Type** | `application/json` |
+
+### 2.1 Authentication
+
+All `/paper/*` endpoints require an API key. Pass it via one of:
+
+**Option 1: Request header (recommended)**
+
+```bash
+curl -H "X-API-Key: lw-your-api-key" "http://210.45.70.162:4000/paper/search?query=transformer"
+```
+
+**Option 2: Query parameter**
+
+```bash
+curl "http://210.45.70.162:4000/paper/search?query=transformer&apiKey=lw-your-api-key"
+```
+
+**Python example**
+
+```python
+import requests
+
+headers = {"X-API-Key": "lw-your-api-key"}
+r = requests.get("http://210.45.70.162:4000/paper/search",
+                  params={"query": "transformer"},
+                  headers=headers)
+print(r.json())
+```
+
+To request an API key, please contact us via email.
+
+**Authentication error responses**
+
+| HTTP Status | Description |
+|-------------|-------------|
+| 401 | No API key provided |
+| 403 | Invalid or inactive API key |
 
 ---
 
@@ -436,6 +473,8 @@ To fetch next page: set `offset` to the value of `next`.
 | HTTP Status | Description |
 |-------------|-------------|
 | 200 | Success |
+| 401 | No API key provided |
+| 403 | Invalid or inactive API key |
 | 404 | Resource not found (e.g. paper not found) |
 | 422 | Validation error (e.g. limit out of range) |
 | 500 | Server error |

@@ -37,6 +37,7 @@ logging.getLogger("uvicorn.error").handlers = [_log_handler, logging.StreamHandl
 from api.paper import router as paper_router
 from api.paper_detail import router as paper_detail_router
 from api.paper_citations import router as paper_citations_router
+from api.admin import router as admin_router
 from core.retrieve import Retriever
 from core.retrieve.embedding_batcher import EmbeddingBatcher
 from core.retrieve.dense_search_batcher import DenseSearchBatcher
@@ -58,6 +59,10 @@ async def lifespan(app: FastAPI):
 
     init_db(create_fts=False)
     print("✅ papers.db ready.")
+
+    from auth.database import init_auth_db
+    init_auth_db()
+    print("✅ auth.db ready.")
 
     dense_search_batcher = DenseSearchBatcher()
     dense_search_batcher.start()
@@ -135,9 +140,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+if config.AUTH_ENABLED:
+    from auth.middleware import ApiKeyMiddleware
+    app.add_middleware(ApiKeyMiddleware)
+    logging.getLogger(__name__).info("🔐 API key authentication enabled.")
+
 app.include_router(paper_router)
 app.include_router(paper_citations_router)
 app.include_router(paper_detail_router)
+app.include_router(admin_router)
 
 
 def _force_exit_on_second_sigint():
@@ -162,6 +173,6 @@ if __name__ == "__main__":
         port=config.API_PORT,
         workers=config.UVICORN_WORKERS,
         reload=False,
-        timeout_keep_alive=60,
-        limit_concurrency=200,  # Max concurrent connections; prevents overload
+        timeout_keep_alive=config.UVICORN_TIMEOUT_KEEP_ALIVE,
+        limit_concurrency=config.UVICORN_LIMIT_CONCURRENCY,
     )

@@ -17,6 +17,7 @@ qdrant-*.tar.gz
 
 # Runtime
 logs/
+.auth_cache_version
 build_logs/
 .qdrant-initialized
 

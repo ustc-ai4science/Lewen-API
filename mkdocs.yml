@@ -69,4 +69,5 @@ nav:
       - 数据集结构: data.md
       - 增量更新: incremental-update.md
   - 运维经验:
+      - API Key 管理指南: api-key-admin.md
       - 性能调优踩坑记录: performance-lessons.md

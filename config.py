@@ -52,6 +52,8 @@ API_HOST: str = "0.0.0.0"
 API_PORT: int = 4000
 # Qdrant Server supports multi-worker; increase for high concurrency
 UVICORN_WORKERS: int = int(os.getenv("UVICORN_WORKERS", "4"))
+UVICORN_TIMEOUT_KEEP_ALIVE: int = int(os.getenv("UVICORN_TIMEOUT_KEEP_ALIVE", "60"))
+UVICORN_LIMIT_CONCURRENCY: int = int(os.getenv("UVICORN_LIMIT_CONCURRENCY", "500"))  # Max concurrent connections
 
 # ── Search Defaults ────────────────────────────────────────────────────
 DEFAULT_LIMIT: int = 10
@@ -61,6 +63,12 @@ RRF_K: int = 60
 HEAVY_OPS_MAX_CONCURRENT: int = int(os.getenv("HEAVY_OPS_MAX_CONCURRENT", "100"))
 # Per-request timeout (s). Matches client timeout (e.g. test_load.py --timeout 30).
 REQUEST_TIMEOUT: float = float(os.getenv("REQUEST_TIMEOUT", "30"))
+
+# ── Auth ───────────────────────────────────────────────────────────────
+AUTH_ENABLED: bool = os.getenv("AUTH_ENABLED", "false").lower() in ("1", "true", "yes")
+AUTH_DB_PATH: str = str(CORPUS_DIR / "auth.db")
+ADMIN_SECRET: str = os.getenv("ADMIN_SECRET", "")
+AUTH_CACHE_TTL: int = int(os.getenv("AUTH_CACHE_TTL", "60"))  # seconds
 
 # ── Ingest Defaults ───────────────────────────────────────────────────
 INGEST_BATCH_SIZE: int = 5000
