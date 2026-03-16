@@ -43,6 +43,7 @@ def main() -> None:
          {"query": "reinforcement learning", "retrieval": "hybrid", "limit": 10, "fields": "*"}),
     ]
 
+    headers = {"X-API-Key": args.api_key} if args.api_key else None
     run_load_test(
         cases,
         workers=args.workers,
@@ -50,6 +51,7 @@ def main() -> None:
         timeout=args.timeout,
         log_file=log_file,
         title="/paper/search Load Test",
+        headers=headers,
     )
 
 

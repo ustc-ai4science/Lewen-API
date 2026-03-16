@@ -38,7 +38,7 @@ def _get_session() -> requests.Session:
 SAMPLE_PAPER_QUERY = "TimeDART: A Diffusion Autoregressive Transformer for Self-Supervised Time-Series Representations"
 
 
-def _get_sample_paper_id(base: str, timeout: int = 30, debug: bool = False) -> str | None:
+def _get_sample_paper_id(base: str, timeout: int = 30, debug: bool = False, headers: dict | None = None) -> str | None:
     """Get paper_id for TimeDART via title search.
 
     Tries full title first, then 'TimeDART' as fallback (FTS5 may not match long phrases).
@@ -51,6 +51,7 @@ def _get_sample_paper_id(base: str, timeout: int = 30, debug: bool = False) -> s
             r = s.get(
                 f"{base}/paper/search/title",
                 params={"query": query, "limit": 10},
+                headers=headers,
                 timeout=timeout,
             )
         try:
@@ -84,11 +85,12 @@ def _single_request(
     url: str,
     params: dict | None = None,
     timeout: int = 60,
+    headers: dict | None = None,
 ) -> tuple[bool, float, str | None]:
     """Execute one request. Returns (success, elapsed_seconds, error_msg_or_None)."""
     start = time.perf_counter()
     try:
-        r = session.get(url, params=params, timeout=timeout)
+        r = session.get(url, params=params, headers=headers, timeout=timeout)
         elapsed = time.perf_counter() - start
         if r.status_code == 200:
             return True, elapsed, None
@@ -113,6 +115,7 @@ def _run_load_test(
     workers: int,
     requests_per_case: int,
     timeout: int,
+    headers: dict | None = None,
 ) -> tuple[dict, dict[str, dict], list[dict]]:
     """Run concurrent load test. Returns (overall_stats, per_endpoint_stats, failed_requests)."""
 
@@ -140,7 +143,7 @@ def _run_load_test(
 
     def worker(task: tuple[str, str, dict | None]) -> tuple[str, bool, float, str | None, str, dict | None]:
         name, url, params = task
-        ok, elapsed, err = _single_request(_get_session(), url, params, timeout)
+        ok, elapsed, err = _single_request(_get_session(), url, params, timeout, headers=headers)
         return name, ok, elapsed, err, url, params
 
     start = time.perf_counter()
@@ -214,9 +217,11 @@ def run_load_test(
     log_failures: str | None = None,
     cooldown: int = 0,
     debug: bool = False,
+    api_key: str | None = None,
 ) -> None:
     """Run load test and print report."""
     base = base_url.rstrip("/")
+    headers = {"X-API-Key": api_key} if api_key else None
 
     num_cases = 11
     total_req = num_cases * requests_per_endpoint
@@ -230,14 +235,14 @@ def run_load_test(
         time.sleep(cooldown)
 
     print("\n📋 Fetching sample paper (TimeDART: A Diffusion Autoregressive Transformer...)...")
-    paper_id = _get_sample_paper_id(base, timeout, debug=debug)
+    paper_id = _get_sample_paper_id(base, timeout, debug=debug, headers=headers)
     if not paper_id:
         print("❌ Failed to get sample paper. Abort.")
         sys.exit(1)
     print(f"   paper_id: {paper_id[:16]}...")
 
     print(f"\n🚀 Running load test ({workers} workers, {total_req} requests)...", flush=True)
-    overall, per_endpoint, failed_requests = _run_load_test(base, paper_id, workers, requests_per_endpoint, timeout)
+    overall, per_endpoint, failed_requests = _run_load_test(base, paper_id, workers, requests_per_endpoint, timeout, headers=headers)
 
     print("\n" + "=" * 60, flush=True)
     print("📊 Overall Results", flush=True)
@@ -315,6 +320,7 @@ if __name__ == "__main__":
         help="Wait SEC seconds before starting (helps when running back-to-back tests)",
     )
     parser.add_argument("--debug", action="store_true", help="Print debug info when fetching sample paper")
+    parser.add_argument("--api-key", default=None, help="API key for authentication (X-API-Key header)")
     log_group = parser.add_mutually_exclusive_group()
     log_group.add_argument(
         "--log-failures",
@@ -338,6 +344,7 @@ if __name__ == "__main__":
             log_failures=log_failures,
             cooldown=args.cooldown,
             debug=args.debug,
+            api_key=args.api_key,
         )
     except KeyboardInterrupt:
         print("\n⚠️ Interrupted by user.", flush=True)

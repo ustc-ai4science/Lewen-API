@@ -36,12 +36,13 @@ SAMPLE_PAPER_QUERY = (
 )
 
 
-def get_sample_paper_id(base: str, timeout: int = 30) -> str | None:
+def get_sample_paper_id(base: str, timeout: int = 30, headers: dict | None = None) -> str | None:
     """Get paper_id for TimeDART via title search.
 
     Args:
         base: API base URL.
         timeout: Request timeout in seconds.
+        headers: Optional request headers (e.g. API key).
 
     Returns:
         paper_id string or None.
@@ -52,6 +53,7 @@ def get_sample_paper_id(base: str, timeout: int = 30) -> str | None:
                 r = s.get(
                     f"{base}/paper/search/title",
                     params={"query": query, "limit": 10},
+                    headers=headers,
                     timeout=timeout,
                 )
             if r.status_code != 200:
@@ -73,6 +75,7 @@ def single_request(
     url: str,
     params: dict | None = None,
     timeout: int = 30,
+    headers: dict | None = None,
 ) -> tuple[bool, float, str | None]:
     """Execute one GET request.
 
@@ -80,6 +83,7 @@ def single_request(
         url: Full request URL.
         params: Query parameters.
         timeout: Request timeout in seconds.
+        headers: Optional request headers (e.g. API key).
 
     Returns:
         (success, elapsed_seconds, error_msg_or_None).
@@ -87,7 +91,7 @@ def single_request(
     session = get_session()
     start = time.perf_counter()
     try:
-        r = session.get(url, params=params, timeout=timeout)
+        r = session.get(url, params=params, headers=headers, timeout=timeout)
         elapsed = time.perf_counter() - start
         if r.status_code == 200:
             return True, elapsed, None
@@ -114,6 +118,7 @@ def run_load_test(
     timeout: int = 30,
     log_file: str | None = None,
     title: str = "Load Test",
+    headers: dict | None = None,
 ) -> None:
     """Run a concurrent load test on specified cases and print a report.
 
@@ -124,6 +129,7 @@ def run_load_test(
         timeout: Per-request timeout in seconds.
         log_file: If set, append failures to this file.
         title: Title for the report header.
+        headers: Optional request headers (e.g. API key).
     """
     tasks: list[tuple[str, str, dict | None]] = []
     for name, url, params in cases:
@@ -144,7 +150,7 @@ def run_load_test(
 
     def worker(task: tuple[str, str, dict | None]):
         name, url, params = task
-        ok, elapsed, err = single_request(url, params, timeout)
+        ok, elapsed, err = single_request(url, params, timeout, headers=headers)
         return name, ok, elapsed, err, url, params
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -251,4 +257,6 @@ def make_base_parser(description: str) -> argparse.ArgumentParser:
                         help="Per-request timeout in seconds (default: 30)")
     parser.add_argument("--no-log", action="store_true",
                         help="Do not log failures to file")
+    parser.add_argument("--api-key", default=None,
+                        help="API key for authentication (X-API-Key header)")
     return parser

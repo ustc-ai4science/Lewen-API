@@ -169,3 +169,31 @@ python manage_keys.py create --name "admin" --email "admin@lewen.com"
 | `.env` | 包含 `ADMIN_SECRET` 等敏感配置，已在 `.gitignore` 中排除 |
 
 > 备份服务器时请一并备份 `corpus/auth.db`，否则所有 Key 将丢失。
+
+---
+
+## 6. 监控与流量查看
+
+### 6.1 日志中的 Key 标识
+
+每次认证成功的请求会在 `logs/api.log` 中记录一行，包含 **key_prefix**（不记录完整 Key，避免泄露）：
+
+```
+2026-03-16 16:30:01  INFO     auth.middleware  key_prefix=lw-72e13819 path=/paper/search method=GET
+```
+
+可根据 `key_prefix` 对应到 `manage_keys.py list` 或 `/admin/keys` 中的 Key。
+
+### 6.2 按 Key 统计请求量
+
+```bash
+# 统计各 key_prefix 的请求次数
+grep "key_prefix=" logs/api.log | sed -n 's/.*key_prefix=\([^ ]*\).*/\1/p' | sort | uniq -c | sort -rn
+
+# 只看某个 Key 的请求
+grep "key_prefix=lw-72e13819" logs/api.log
+```
+
+### 6.3 数据库中的最后使用时间
+
+`manage_keys.py list` 或 `GET /admin/keys` 中的 `last_used_at` 会在该 Key 每次被使用时更新（有缓存时可能延迟最多约 1 分钟），可用来判断 Key 是否仍在被使用。

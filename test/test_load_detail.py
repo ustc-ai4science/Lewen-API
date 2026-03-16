@@ -22,8 +22,10 @@ def main() -> None:
     base = args.base_url.rstrip("/")
     log_file = None if args.no_log else "test/load_failures_detail.log"
 
+    headers = {"X-API-Key": args.api_key} if args.api_key else None
+
     print("📋 Fetching sample paper_id ...", flush=True)
-    paper_id = get_sample_paper_id(base, timeout=args.timeout)
+    paper_id = get_sample_paper_id(base, timeout=args.timeout, headers=headers)
     if not paper_id:
         print("❌ Failed to get sample paper. Abort.")
         sys.exit(1)
@@ -48,6 +50,7 @@ def main() -> None:
         timeout=args.timeout,
         log_file=log_file,
         title="/paper/{id} Detail Load Test",
+        headers=headers,
     )
 
 
