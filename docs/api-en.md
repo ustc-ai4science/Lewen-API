@@ -55,6 +55,9 @@ print(r.json())
 
 To request an API key, please contact us via email.
 
+!!! warning "Keep your API key safe"
+    The API key is shown only once at creation time. The server does not store the plaintext key. If lost, it cannot be recovered — you will need to request a new one.
+
 **Authentication error responses**
 
 | HTTP Status | Description |
