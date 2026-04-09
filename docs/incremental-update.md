@@ -4,7 +4,39 @@
 
 ---
 
-## 1. 增量更新原理
+## 1. 一键更新（推荐）
+
+```bash
+# 更新到最新 S2 release
+bash update.sh
+
+# 更新到指定日期
+bash update.sh 2026-03-10
+```
+
+脚本自动完成以下流程：
+
+1. 从 `corpus/current_release.txt` 读取当前版本
+2. 查询 S2 API 获取可用 releases，确定目标版本
+3. 下载增量 diff 到 `PaperData/incremental/`
+4. 合并到 SQLite（paper_metadata、citations、ID 映射）+ FTS5
+5. 编码新增/修改论文的 BGE-M3 向量，upsert 到 Qdrant；删除已移除论文的向量
+6. 更新 `corpus/current_release.txt` 为最新版本
+
+### 前置条件
+
+- `corpus/current_release.txt` 存在且包含当前 release 日期
+- `.env` 中配置了 `S2_API_KEY`
+- Qdrant 服务运行中
+- GPU 可用（BGE-M3 编码需要）
+
+### 版本跟踪
+
+当前数据对应的 S2 release 日期记录在 `corpus/current_release.txt` 中（初始值 `2026-01-27`），每次更新成功后自动写入新版本。
+
+---
+
+## 2. 增量更新原理
 
 - **全量数据**：每次 release 包含完整快照，体积大。
 - **增量 diff**：只包含相邻两次 release 之间的变更（`update_files` 新增/更新，`delete_files` 删除）。
@@ -44,7 +76,7 @@ GET /diffs/{start_release_id}/to/{end_release_id}/{dataset_name}
 
 ---
 
-## 2. 主键说明
+## 3. 主键说明
 
 | 数据集      | 主键字段     |
 |-------------|--------------|
@@ -56,19 +88,19 @@ GET /diffs/{start_release_id}/to/{end_release_id}/{dataset_name}
 
 ---
 
-## 3. 下载增量 diff（按 PaperData 形式保存）
+## 4. 手动分步执行
 
-### 使用脚本
+如需手动控制每个步骤，可分开执行：
+
+### 4.1 下载增量 diff
 
 ```bash
-# 在项目根目录执行
+# 自动从 corpus/current_release.txt 读取起始版本，下载到最新
 python build_corpus/data/download_incremental_diffs.py
+
+# 指定起止版本
+python build_corpus/data/download_incremental_diffs.py --start 2026-01-27 --end 2026-03-10
 ```
-
-脚本默认参数（可在 `if __name__ == "__main__"` 中修改）：
-
-- `START = "2026-01-27"`：你当前的全量 release
-- `END = "2026-02-27"`：目标日期（会解析为最近可用 release，如 2026-02-24）
 
 ### 输出目录结构
 
@@ -95,73 +127,41 @@ PaperData/
 
 每个 `updates/`、`deletes/` 下的文件为 JSONL（或 .gz），格式与 PaperData 全量一致。
 
----
+### 4.2 合并到数据库
 
-## 4. 合并到现有 PaperData
-
-增量 diff 只是“变更集”，要得到完整 PaperData，需要：
-
-1. 加载现有 PaperData（或从全量 release 下载）
-2. 对每个 diff：
-   - 遍历 `update_files`，按主键 upsert
-   - 遍历 `delete_files`，按主键 delete
-3. 将合并结果写回 PaperData 目录（保持原有分区结构）
-
-示例逻辑（伪代码）：
-
-```python
-# papers 示例
-for diff in diffs["diffs"]:
-    for url in diff["update_files"]:
-        for line in requests.get(url).iter_lines():
-            record = json.loads(line)
-            datastore.upsert(record["corpusid"], record)
-    for url in diff["delete_files"]:
-        for line in requests.get(url).iter_lines():
-            record = json.loads(line)
-            datastore.delete(record["corpusid"])
+```bash
+python build_corpus/merge_incremental.py PaperData/incremental/2026-01-27_to_2026-02-24
 ```
 
-若使用 SQLite / Qdrant 等存储，可先加载全量，再按上述方式应用 diff。
+合并操作包括：
+
+- SQLite：upsert/delete paper_metadata、corpus_id_mapping、arxiv_to_paper、citations
+- FTS5：刷新 paper_fts_title 和 paper_fts_combined
+- Qdrant：编码新增/修改论文的 BGE-M3 向量并 upsert，删除已移除论文的向量
+
+### 4.3 更新版本记录
+
+```bash
+echo "2026-02-24" > corpus/current_release.txt
+```
 
 ---
 
-## 5. 场景示例：2026-01-27 → 2026-02-27
+## 5. 相关脚本
 
-1. **列出可用 release**
-
-   ```python
-   import requests
-   r = requests.get("https://api.semanticscholar.org/datasets/v1/release/").json()
-   # 2026-01-27 到 2026-02-27 之间：2026-02-03, 2026-02-10, 2026-02-17, 2026-02-24
-   ```
-
-2. **获取增量 diff**
-
-   ```bash
-   python build_corpus/data/download_incremental_diffs.py
-   ```
-
-3. **合并到 PaperData**
-
-   - 使用 `build_corpus/data/download_incremental_diffs.py` 下载的 `updates/`、`deletes/`
-   - 按主键对现有 PaperData 做 upsert 和 delete
-   - 或先导入到数据库，再导出为 PaperData 格式
-
----
-
-## 6. 相关脚本
-
-| 脚本                               | 作用                         |
-|------------------------------------|------------------------------|
+| 脚本 | 作用 |
+|------|------|
+| `update.sh` | 一键更新入口（下载 + 合并 + 版本更新） |
 | `build_corpus/data/download_incremental_diffs.py` | 下载增量 diff 到 PaperData 目录 |
-| `demo.py`                          | 下载全量 release 的 URL 列表 |
-| `build_corpus/ingest_citations.py`       | 将引用数据导入 SQLite        |
+| `build_corpus/merge_incremental.py` | 合并增量到 SQLite + FTS5 + Qdrant |
+| `build_corpus/optimize_fts.py` | FTS5 索引优化（建议更新后执行） |
 
 ---
 
-## 7. 注意事项
+## 6. 注意事项
 
 - 需要配置 `S2_API_KEY`（`.env` 或环境变量）以访问 Datasets API。
 - diff 的 `update_files`、`delete_files` 为预签名 URL，有时效，建议下载后本地保存。
 - 合并时需保证主键一致（如 `corpusid`、`citationid`、`authorid`）。
+- 合并完成后增量文件保留在 `PaperData/incremental/` 中，不会自动删除。
+- 合并过程中 Qdrant 向量编码需要 GPU，确保有可用的 CUDA 设备。
