@@ -14,6 +14,7 @@ from qdrant_client.models import (
     Filter,
     FilterSelector,
     MatchAny,
+    PointIdsList,
     PointStruct,
     VectorParams,
 )
@@ -46,6 +47,7 @@ def get_client() -> QdrantClient:
                 host=config.QDRANT_HOST,
                 port=config.QDRANT_PORT,
                 prefer_grpc=config.QDRANT_PREFER_GRPC,
+                timeout=config.QDRANT_TIMEOUT,
             )
             print(f"✅ Qdrant connected: {config.QDRANT_HOST}:{config.QDRANT_PORT}")
     return _client
@@ -169,16 +171,8 @@ def delete_vectors(paper_ids: list[str]) -> None:
     if not paper_ids:
         return
     client = get_client()
+    point_ids = [_paper_id_to_point_id(pid) for pid in paper_ids]
     client.delete(
         collection_name=config.QDRANT_COLLECTION_NAME,
-        points_selector=FilterSelector(
-            filter=Filter(
-                must=[
-                    FieldCondition(
-                        key="paper_id",
-                        match=MatchAny(any=paper_ids),
-                    )
-                ]
-            )
-        ),
+        points_selector=PointIdsList(points=point_ids),
     )

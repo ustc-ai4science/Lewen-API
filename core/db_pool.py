@@ -24,7 +24,7 @@ def _create_ro_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA wal_autocheckpoint = 0")
-    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute(f"PRAGMA busy_timeout = {config.SQLITE_BUSY_TIMEOUT_MS}")
     conn.execute(f"PRAGMA cache_size = {config.SQLITE_CACHE_SIZE}")
     conn.execute(f"PRAGMA mmap_size = {config.SQLITE_MMAP_SIZE}")
     conn.execute("PRAGMA temp_store = MEMORY")

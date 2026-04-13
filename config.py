@@ -46,6 +46,7 @@ QDRANT_PORT: int = int(os.getenv("QDRANT_PORT", "6334"))  # gRPC port
 QDRANT_PATH: str | None = os.getenv("QDRANT_PATH")  # Non-empty: use local embedded mode
 QDRANT_COLLECTION_NAME: str = "papers"
 QDRANT_PREFER_GRPC: bool = True
+QDRANT_TIMEOUT: float = float(os.getenv("QDRANT_TIMEOUT", "300"))
 
 # ── API Server ─────────────────────────────────────────────────────────
 API_HOST: str = "0.0.0.0"
@@ -74,3 +75,4 @@ AUTH_CACHE_TTL: int = int(os.getenv("AUTH_CACHE_TTL", "60"))  # seconds
 INGEST_BATCH_SIZE: int = 5000
 SQLITE_CACHE_SIZE: int = -1024 * 512  # 512 MB (more cache = faster SQLite/FTS5)
 SQLITE_MMAP_SIZE: int = 512 * 1024 * 1024  # 512 MB for FTS5 read performance
+SQLITE_BUSY_TIMEOUT_MS: int = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "300000"))  # 5 min

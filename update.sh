@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 #
-# One-command incremental update for Semantic Scholar data.
+# One-command wrapper: download incremental diffs, validate them, then merge.
 #
-# Usage:
-#   bash update.sh              # Update to the latest S2 release
-#   bash update.sh 2026-03-10   # Update to a specific target date
+# Preferred split entrypoints:
+#   bash update_download.sh [END_RELEASE]
+#   bash update_validate.sh [END_RELEASE]
+#   bash update_merge.sh PaperData/incremental/START_to_END
 #
-# Prerequisites:
-#   - corpus/current_release.txt exists with the current release date
-#   - S2_API_KEY configured in .env
-#   - Qdrant server running (for vector updates)
-#   - GPU available (for BGE-M3 encoding)
+# Legacy convenience usage:
+#   bash update.sh
+#   bash update.sh 2026-03-10
 
 set -euo pipefail
 
@@ -20,39 +19,12 @@ cd "$SCRIPT_DIR"
 RELEASE_FILE="corpus/current_release.txt"
 END_TARGET="${1:-latest}"
 
-# ── Preflight checks ─────────────────────────────────────────────
-
-if [ ! -f "$RELEASE_FILE" ]; then
-    echo "❌ $RELEASE_FILE not found."
-    echo "   Create it with your current S2 release date, e.g.:"
-    echo "   echo '2026-01-27' > $RELEASE_FILE"
-    exit 1
-fi
-
-CURRENT_RELEASE="$(cat "$RELEASE_FILE" | tr -d '[:space:]')"
-if [ -z "$CURRENT_RELEASE" ]; then
-    echo "❌ $RELEASE_FILE is empty."
-    exit 1
-fi
-
-echo "═══════════════════════════════════════════════════════════"
-echo "  S2 Incremental Update"
-echo "  Current release: $CURRENT_RELEASE"
-echo "  Target:          $END_TARGET"
-echo "═══════════════════════════════════════════════════════════"
-echo ""
-
 # ── Step 1: Download incremental diffs ────────────────────────────
-
-echo "📥 Step 1: Downloading incremental diffs..."
-echo ""
 
 DOWNLOAD_LOG=$(mktemp)
 trap "rm -f '$DOWNLOAD_LOG'" EXIT
 
-python build_corpus/data/download_incremental_diffs.py \
-    --start "$CURRENT_RELEASE" \
-    --end "$END_TARGET" 2>&1 | tee "$DOWNLOAD_LOG"
+bash update_download.sh "$END_TARGET" 2>&1 | tee "$DOWNLOAD_LOG"
 
 DOWNLOAD_EXIT=${PIPESTATUS[0]}
 if [ "$DOWNLOAD_EXIT" -ne 0 ]; then
@@ -66,34 +38,28 @@ INCR_DIR=$(grep "^📦 INCR_DIR=" "$DOWNLOAD_LOG" | sed 's/^📦 INCR_DIR=//')
 
 if [ -z "$END_RELEASE" ] || [ -z "$INCR_DIR" ]; then
     echo ""
+    CURRENT_RELEASE="$(tr -d '[:space:]' < "$RELEASE_FILE")"
     echo "✅ Already up to date (current: $CURRENT_RELEASE)"
     exit 0
 fi
 
 echo ""
-echo "   Downloaded: $CURRENT_RELEASE → $END_RELEASE"
+echo "   Downloaded incremental diffs to: $INCR_DIR"
 echo "   Directory:  $INCR_DIR"
 echo ""
 
-# ── Step 2: Merge into SQLite + FTS5 + Qdrant ────────────────────
+# ── Step 2: Validate downloaded diffs ─────────────────────────────
 
-echo "🔄 Step 2: Merging incremental diffs (SQLite + FTS5 + Qdrant)..."
-echo ""
-
-python build_corpus/merge_incremental.py "$INCR_DIR" || {
+bash update_validate.sh "$END_RELEASE" || {
     echo ""
-    echo "❌ Merge failed. Current release NOT updated."
+    echo "❌ Validation failed."
     exit 1
 }
 
-echo ""
+# ── Step 3: Merge into SQLite + FTS5 + Qdrant ────────────────────
 
-# ── Step 3: Update version tracking ──────────────────────────────
-
-echo "$END_RELEASE" > "$RELEASE_FILE"
-echo "📌 Updated $RELEASE_FILE → $END_RELEASE"
-
-echo ""
-echo "═══════════════════════════════════════════════════════════"
-echo "  ✅ Update complete: $CURRENT_RELEASE → $END_RELEASE"
-echo "═══════════════════════════════════════════════════════════"
+bash update_merge.sh "$INCR_DIR" || {
+    echo ""
+    echo "❌ Merge failed."
+    exit 1
+}

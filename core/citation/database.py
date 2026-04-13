@@ -78,9 +78,19 @@ def get_connection(readonly: bool = False) -> sqlite3.Connection:
     Path(config.PAPERS_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     if readonly:
         uri = f"file:{config.PAPERS_DB_PATH}?mode=ro"
-        conn = sqlite3.connect(uri, uri=True)
+        conn = sqlite3.connect(
+            uri,
+            uri=True,
+            timeout=config.SQLITE_BUSY_TIMEOUT_MS / 1000,
+        )
     else:
-        conn = sqlite3.connect(config.PAPERS_DB_PATH)
+        conn = sqlite3.connect(
+            config.PAPERS_DB_PATH,
+            timeout=config.SQLITE_BUSY_TIMEOUT_MS / 1000,
+        )
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute(f"PRAGMA busy_timeout = {config.SQLITE_BUSY_TIMEOUT_MS}")
     conn.execute(f"PRAGMA cache_size = {config.SQLITE_CACHE_SIZE}")
     return conn
 
@@ -222,28 +232,59 @@ def delete_by_corpus_ids(conn: sqlite3.Connection, corpus_ids: list[int]) -> Non
     """
     if not corpus_ids:
         return
-    placeholders = ",".join("?" for _ in corpus_ids)
-    paper_ids_subquery = f"(SELECT paper_id FROM corpus_id_mapping WHERE corpus_id IN ({placeholders}))"
-    conn.execute(
-        f"DELETE FROM paper_fts_title WHERE paper_id IN {paper_ids_subquery}",
-        corpus_ids,
-    )
-    conn.execute(
-        f"DELETE FROM paper_fts_combined WHERE paper_id IN {paper_ids_subquery}",
-        corpus_ids,
-    )
-    conn.execute(
-        f"DELETE FROM arxiv_to_paper WHERE paper_id IN {paper_ids_subquery}",
-        corpus_ids,
-    )
-    conn.execute(
-        f"DELETE FROM paper_metadata WHERE corpus_id IN ({placeholders})",
-        corpus_ids,
-    )
-    conn.execute(
-        f"DELETE FROM corpus_id_mapping WHERE corpus_id IN ({placeholders})",
-        corpus_ids,
-    )
+    for i in range(0, len(corpus_ids), config.INGEST_BATCH_SIZE):
+        batch_ids = corpus_ids[i : i + config.INGEST_BATCH_SIZE]
+        placeholders = ",".join("?" for _ in batch_ids)
+        paper_ids_subquery = f"(SELECT paper_id FROM corpus_id_mapping WHERE corpus_id IN ({placeholders}))"
+        conn.execute(
+            f"DELETE FROM paper_fts_title WHERE paper_id IN {paper_ids_subquery}",
+            batch_ids,
+        )
+        conn.execute(
+            f"DELETE FROM paper_fts_combined WHERE paper_id IN {paper_ids_subquery}",
+            batch_ids,
+        )
+        conn.execute(
+            f"DELETE FROM arxiv_to_paper WHERE paper_id IN {paper_ids_subquery}",
+            batch_ids,
+        )
+        conn.execute(
+            f"DELETE FROM paper_metadata WHERE corpus_id IN ({placeholders})",
+            batch_ids,
+        )
+        conn.execute(
+            f"DELETE FROM corpus_id_mapping WHERE corpus_id IN ({placeholders})",
+            batch_ids,
+        )
+
+
+def delete_by_paper_ids(conn: sqlite3.Connection, paper_ids: list[str]) -> None:
+    """Delete paper_metadata, corpus_id_mapping, arxiv_to_paper, and FTS tables by paper_id."""
+    if not paper_ids:
+        return
+    for i in range(0, len(paper_ids), config.INGEST_BATCH_SIZE):
+        batch_ids = paper_ids[i : i + config.INGEST_BATCH_SIZE]
+        placeholders = ",".join("?" for _ in batch_ids)
+        conn.execute(
+            f"DELETE FROM paper_fts_title WHERE paper_id IN ({placeholders})",
+            batch_ids,
+        )
+        conn.execute(
+            f"DELETE FROM paper_fts_combined WHERE paper_id IN ({placeholders})",
+            batch_ids,
+        )
+        conn.execute(
+            f"DELETE FROM arxiv_to_paper WHERE paper_id IN ({placeholders})",
+            batch_ids,
+        )
+        conn.execute(
+            f"DELETE FROM paper_metadata WHERE paper_id IN ({placeholders})",
+            batch_ids,
+        )
+        conn.execute(
+            f"DELETE FROM corpus_id_mapping WHERE paper_id IN ({placeholders})",
+            batch_ids,
+        )
 
 
 def delete_citations_by_ids(conn: sqlite3.Connection, citation_ids: list[int]) -> None:
