@@ -23,7 +23,7 @@ S2_API_BASE_URL: str = "https://api.semanticscholar.org/graph/v1"
 # ── Embedding Model ───────────────────────────────────────────────────
 BGE_M3_MODEL_PATH: str = "/data/wdy/Downloads/models/BAAI/bge-m3"
 VECTOR_DIM: int = 1024
-GPU_DEVICE_ID: int = 1
+GPU_DEVICE_ID: int = int(os.getenv("GPU_DEVICE_ID", "1"))
 
 # ── Embedding Batch Queue ────────────────────────────────────────────
 # Batch multiple search queries for GPU encoding to amortize transfer overhead.

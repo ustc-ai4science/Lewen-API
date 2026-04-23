@@ -7,6 +7,7 @@ and sample paper_id fetching. Each test_load_*.py script imports from here.
 from __future__ import annotations
 
 import argparse
+import os
 import statistics
 import sys
 import threading
@@ -19,14 +20,30 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 _thread_local = threading.local()
+
+
+def _should_bypass_proxy(url: str) -> bool:
+    return "://localhost" in url or "://127.0.0.1" in url
+
+
+def default_api_key() -> str | None:
+    return (
+        os.getenv("Lewen_API_KEY")
+        or os.getenv("PAPER_SEARCH_API_KEY")
+        or os.getenv("API_KEY")
+    )
 
 
 def get_session() -> requests.Session:
     """Return a per-thread reusable Session."""
     if not hasattr(_thread_local, "session"):
         _thread_local.session = requests.Session()
+        _thread_local.session.trust_env = False
     return _thread_local.session
 
 
@@ -50,6 +67,8 @@ def get_sample_paper_id(base: str, timeout: int = 30, headers: dict | None = Non
     for query in [SAMPLE_PAPER_QUERY, "TimeDART"]:
         try:
             with requests.Session() as s:
+                if _should_bypass_proxy(base):
+                    s.trust_env = False
                 r = s.get(
                     f"{base}/paper/search/title",
                     params={"query": query, "limit": 10},
@@ -257,6 +276,6 @@ def make_base_parser(description: str) -> argparse.ArgumentParser:
                         help="Per-request timeout in seconds (default: 30)")
     parser.add_argument("--no-log", action="store_true",
                         help="Do not log failures to file")
-    parser.add_argument("--api-key", default=None,
+    parser.add_argument("--api-key", default=default_api_key(),
                         help="API key for authentication (X-API-Key header)")
     return parser

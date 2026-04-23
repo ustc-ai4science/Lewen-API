@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS arxiv_to_paper (
     arxiv_id TEXT PRIMARY KEY,
     paper_id TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_arxiv_to_paper_paper ON arxiv_to_paper(paper_id);
 
 CREATE TABLE IF NOT EXISTS citations (
     citation_id INTEGER PRIMARY KEY,

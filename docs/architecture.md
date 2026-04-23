@@ -164,8 +164,17 @@ Phase 4a ─ ingest_fts_title.py
 Phase 4b ─ ingest_fts_combined.py
   paper_metadata（筛选 arXiv）──→ paper_fts_combined（title+abstract 拼接）
 
-Phase 5 ─ merge_incremental.py
-  PaperData/incremental/*/updates,deletes ──→ 各表增量合并
+Phase 5 ─ incremental 五段式流程
+  Step 5-1: incremental/download.py
+    下载增量 diff
+  Step 5-2: incremental/validate.py
+    校验 diff 并重下坏文件
+  Step 5-3: incremental/sqlite_fts_merge.py
+    PaperData/incremental/*/updates,deletes ──→ SQLite + FTS5
+  Step 5-4: incremental/qdrant_encode.py
+    _qdrant_task.json ──→ 多卡增量 embedding shard
+  Step 5-5: incremental/qdrant_load.py
+    incremental_embeddings_shard_*.npz ──→ Qdrant
 ```
 
 ### 构建命令
@@ -200,8 +209,10 @@ python build_corpus/ingest_fts_title.py --rebuild
 python build_corpus/ingest_fts_combined.py --rebuild
 
 # Phase 5: 增量更新（按需）
-python build_corpus/data/download_incremental_diffs.py
-python build_corpus/merge_incremental.py PaperData/incremental/2026-01-27_to_2026-02-24
+bash incremental/update_download.sh 2026-02-24
+bash incremental/update_validate.sh 2026-02-24
+bash incremental/update_merge.sh PaperData/incremental/2026-01-27_to_2026-02-24
+bash incremental/update_qdrant_incremental.sh PaperData/incremental/2026-01-27_to_2026-02-24 0,2,3
 ```
 
 ### 启动 API 服务
@@ -254,7 +265,8 @@ uvicorn main:app --host 0.0.0.0 --port 4000
 |--------|------|------|
 | papers | corpusid | upsert / delete |
 | abstracts | corpusid | upsert / delete |
-| paper-ids | corpusid | upsert / delete |
+| paper-ids updates | corpusid | upsert |
+| paper-ids deletes | sha | delete |
 | citations | citationid | upsert / delete |
 
 详见 [incremental-update.md](incremental-update.md)。
@@ -290,10 +302,15 @@ Paper_Search_API/
 │   ├── load_embeddings_to_qdrant.py # Phase 3 Step 2: 从 npz 加载写入 Qdrant
 │   ├── ingest_fts_title.py          # Phase 4a: paper_fts_title
 │   ├── ingest_fts_combined.py      # Phase 4b: paper_fts_combined
-│   ├── merge_incremental.py         # Phase 5: 增量合并
 │   ├── optimize_fts.py              # FTS5 索引优化
-│   └── data/
-│       └── download_incremental_diffs.py
+├── incremental/                     # 增量更新流水线
+│   ├── download.py                  # 下载增量 diff
+│   ├── validate.py                  # 校验增量 diff
+│   ├── sqlite_fts_merge.py          # SQLite + FTS 增量合并
+│   ├── qdrant_manifest.py           # 生成 _qdrant_task.json
+│   ├── qdrant_encode.py             # 多卡增量 embedding
+│   ├── qdrant_load.py               # 写入 Qdrant
+│   └── update.sh                    # 一键增量更新入口
 ├── corpus/                          # 运行时数据（构建后生成）
 │   ├── papers.db                    # SQLite: 所有表 + FTS5
 │   ├── qdrant_storage/              # Qdrant 向量存储

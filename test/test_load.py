@@ -13,6 +13,7 @@ Note: If the second run hangs at "Fetching sample paper", the server may still b
 from __future__ import annotations
 
 import argparse
+import os
 import statistics
 import sys
 import threading
@@ -24,14 +25,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # One Session per worker thread for connection reuse.
 _thread_local = threading.local()
 
 
+def _should_bypass_proxy(url: str) -> bool:
+    return "://localhost" in url or "://127.0.0.1" in url
+
+
 def _get_session() -> requests.Session:
     if not hasattr(_thread_local, "session"):
         _thread_local.session = requests.Session()
+        _thread_local.session.trust_env = False
     return _thread_local.session
 
 
@@ -48,6 +57,8 @@ def _get_sample_paper_id(base: str, timeout: int = 30, debug: bool = False, head
     for query in [SAMPLE_PAPER_QUERY, "TimeDART"]:
         last_query = query
         with requests.Session() as s:
+            if _should_bypass_proxy(base):
+                s.trust_env = False
             r = s.get(
                 f"{base}/paper/search/title",
                 params={"query": query, "limit": 10},
@@ -221,6 +232,12 @@ def run_load_test(
 ) -> None:
     """Run load test and print report."""
     base = base_url.rstrip("/")
+    api_key = (
+        api_key
+        or os.getenv("Lewen_API_KEY")
+        or os.getenv("PAPER_SEARCH_API_KEY")
+        or os.getenv("API_KEY")
+    )
     headers = {"X-API-Key": api_key} if api_key else None
 
     num_cases = 11
