@@ -1,6 +1,8 @@
 # Lewen API Documentation
 
-User-facing API reference for the Lewen academic search service.
+User-facing API reference for the Lewen academic search service. [Project documentation](https://ustc-ai4science.github.io/Lewen-API/) · [Open corpus](https://www.modelscope.cn/datasets/flappybear80/lewen-corpus).
+
+Examples use a local deployment. Replace the base URL with the address supplied by your deployment administrator.
 
 ---
 
@@ -21,24 +23,24 @@ All endpoints return JSON.
 
 | Item | Description |
 |------|-------------|
-| **Base URL** | `http://210.45.70.162:4000` |
-| **Authentication** | API Key required (see below) |
+| **Base URL** | `http://localhost:4000` |
+| **Authentication** | Required when `AUTH_ENABLED=true` |
 | **Content-Type** | `application/json` |
 
 ### 2.1 Authentication
 
-All `/paper/*` endpoints require an API key. Pass it via one of:
+Self-hosted deployments default to `AUTH_ENABLED=false`, which requires no API key. When `AUTH_ENABLED=true`, all `/paper/*` endpoints require an API key. Pass it via one of:
 
 **Option 1: Request header (recommended)**
 
 ```bash
-curl -H "X-API-Key: lw-your-api-key" "http://210.45.70.162:4000/paper/search?query=transformer"
+curl -H "X-API-Key: lw-your-api-key" "http://localhost:4000/paper/search?query=transformer"
 ```
 
 **Option 2: Query parameter**
 
 ```bash
-curl "http://210.45.70.162:4000/paper/search?query=transformer&apiKey=lw-your-api-key"
+curl "http://localhost:4000/paper/search?query=transformer&apiKey=lw-your-api-key"
 ```
 
 **Python example**
@@ -47,13 +49,13 @@ curl "http://210.45.70.162:4000/paper/search?query=transformer&apiKey=lw-your-ap
 import requests
 
 headers = {"X-API-Key": "lw-your-api-key"}
-r = requests.get("http://210.45.70.162:4000/paper/search",
+r = requests.get("http://localhost:4000/paper/search",
                   params={"query": "transformer"},
                   headers=headers)
 print(r.json())
 ```
 
-To request an API key, please contact us via email.
+For a self-hosted deployment, create a key with `python manage_keys.py create --name "local-user" --email "user@example.com"`. For other deployments, request a key from their administrator. See the [deployment guide (Chinese)](deployment.md).
 
 !!! warning "Keep your API key safe"
     The API key is shown only once at creation time. The server does not store the plaintext key. If lost, it cannot be recovered — you will need to request a new one.
@@ -115,16 +117,16 @@ Search papers by semantic relevance. Supports sparse, dense, and hybrid retrieva
 
 ```bash
 # Hybrid retrieval (default)
-curl "http://210.45.70.162:4000/paper/search?query=transformer%20attention&limit=5"
+curl "http://localhost:4000/paper/search?query=transformer%20attention&limit=5"
 
 # Sparse retrieval (when GPU unavailable)
-curl "http://210.45.70.162:4000/paper/search?query=transformer&retrieval=sparse&limit=10"
+curl "http://localhost:4000/paper/search?query=transformer&retrieval=sparse&limit=10"
 
 # With filters
-curl "http://210.45.70.162:4000/paper/search?query=BERT&year=2018-2020&minCitationCount=100&fields=abstract,year,authors"
+curl "http://localhost:4000/paper/search?query=BERT&year=2018-2020&minCitationCount=100&fields=abstract,year,authors"
 
 # Return all metadata (fields=* or fields=all)
-curl "http://210.45.70.162:4000/paper/search?query=BERT&fields=*&limit=5"
+curl "http://localhost:4000/paper/search?query=BERT&fields=*&limit=5"
 ```
 
 **Python**
@@ -132,7 +134,7 @@ curl "http://210.45.70.162:4000/paper/search?query=BERT&fields=*&limit=5"
 ```python
 import requests
 
-BASE = "http://210.45.70.162:4000"
+BASE = "http://localhost:4000"
 
 # Hybrid retrieval (default)
 r = requests.get(f"{BASE}/paper/search", params={"query": "transformer attention", "limit": 5})
@@ -209,7 +211,7 @@ Search papers by closest title match. Best for known or partial titles.
 **curl**
 
 ```bash
-curl "http://210.45.70.162:4000/paper/search/title?query=Attention%20is%20all%20you%20need&limit=5"
+curl "http://localhost:4000/paper/search/title?query=Attention%20is%20all%20you%20need&limit=5"
 ```
 
 **Python**
@@ -217,7 +219,7 @@ curl "http://210.45.70.162:4000/paper/search/title?query=Attention%20is%20all%20
 ```python
 import requests
 
-r = requests.get("http://210.45.70.162:4000/paper/search/title", params={
+r = requests.get("http://localhost:4000/paper/search/title", params={
     "query": "Attention is all you need",
     "limit": 5,
 })
@@ -252,13 +254,13 @@ Get full metadata for a single paper.
 
 ```bash
 # By arXiv ID
-curl "http://210.45.70.162:4000/paper/2309.06180"
+curl "http://localhost:4000/paper/2309.06180"
 
 # By SHA with selected fields
-curl "http://210.45.70.162:4000/paper/83b90f4a0ae4cc214eb3cc140ccfef9cd99fac05?fields=abstract,year,authors"
+curl "http://localhost:4000/paper/83b90f4a0ae4cc214eb3cc140ccfef9cd99fac05?fields=abstract,year,authors"
 
 # Return all metadata
-curl "http://210.45.70.162:4000/paper/83b90f4a0ae4cc214eb3cc140ccfef9cd99fac05?fields=*"
+curl "http://localhost:4000/paper/83b90f4a0ae4cc214eb3cc140ccfef9cd99fac05?fields=*"
 ```
 
 **Python**
@@ -266,7 +268,7 @@ curl "http://210.45.70.162:4000/paper/83b90f4a0ae4cc214eb3cc140ccfef9cd99fac05?f
 ```python
 import requests
 
-BASE = "http://210.45.70.162:4000"
+BASE = "http://localhost:4000"
 
 # By arXiv ID
 r = requests.get(f"{BASE}/paper/2309.06180")
@@ -330,7 +332,7 @@ Get papers that cite this paper. **Note**: Only citations where both citing and 
 **curl**
 
 ```bash
-curl "http://210.45.70.162:4000/paper/1706.03762/citations?limit=10"
+curl "http://localhost:4000/paper/1706.03762/citations?limit=10"
 ```
 
 **Python**
@@ -338,7 +340,7 @@ curl "http://210.45.70.162:4000/paper/1706.03762/citations?limit=10"
 ```python
 import requests
 
-r = requests.get("http://210.45.70.162:4000/paper/1706.03762/citations", params={"limit": 10})
+r = requests.get("http://localhost:4000/paper/1706.03762/citations", params={"limit": 10})
 print(r.json())
 ```
 
@@ -375,7 +377,7 @@ Same as citations.
 **curl**
 
 ```bash
-curl "http://210.45.70.162:4000/paper/1706.03762/references?limit=10"
+curl "http://localhost:4000/paper/1706.03762/references?limit=10"
 ```
 
 **Python**
@@ -383,7 +385,7 @@ curl "http://210.45.70.162:4000/paper/1706.03762/references?limit=10"
 ```python
 import requests
 
-r = requests.get("http://210.45.70.162:4000/paper/1706.03762/references", params={"limit": 10})
+r = requests.get("http://localhost:4000/paper/1706.03762/references", params={"limit": 10})
 print(r.json())
 ```
 

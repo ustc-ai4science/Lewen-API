@@ -1,254 +1,134 @@
-# 数据集结构说明
+# 语料库下载与数据结构
 
-本文档描述 PaperData（S2 2026-01-27 版本）的数据结构，以及 `papers.json` 与各表的关系。
+Lewen 的运行语料独立开放在 **[ModelScope：flappybear80/lewen-corpus](https://www.modelscope.cn/datasets/flappybear80/lewen-corpus)**。本仓库提供服务代码与增量更新脚本，首次部署直接下载已构建数据，无需先获取 S2 全量原始快照。
 
----
+## 1. 范围与版本
 
-## 1. PaperData 目录结构
+语料由 Semantic Scholar 的论文元数据、摘要、ID 映射和引用数据整理而来，当前服务范围是具有摘要的 arXiv 论文。引用边仅保留两端均属于语料的记录。历史论文规模约 300 万篇；实际数量与 `corpus/current_release.txt` 对应的数据版本有关。
 
-| 目录 | 文件数量 | 格式 | 规模 | 说明 |
-|------|----------|------|------|------|
-| **paper-ids** | 30 | `.gz` | ~3 亿 | 全量 paper 的 corpus_id ↔ sha 映射 |
-| **abstracts** | 30 | `.gz` | ~3–4 千万 | 有 abstract 的 paper，含 corpus_id |
-| **citations** | 359 | `.gz` | - | 引用关系 |
-| **authors** | 30 | `.gz` | - | 作者信息 |
-| **papers** | 60 | `.gz` | - | 论文元数据，含 externalids（ArXiv 等） |
+本次核对的发布 release 标记为 `2026-03-10`，后续下载应始终以发布文件为准，不要在首次安装时自行填写今天的日期或历史基线日期。该标记是 S2 数据 release，区别于 ModelScope 仓库的 Git revision。
 
-**说明**：abstracts 已含 corpus_id，可单独定义「有 abstract」的 corpus；paper-ids 主要用于 corpus_id → sha 解析，构建时只需为 abstracts 中的 corpus_id 做解析。有 ArXiv ID 的 paper（abstracts 与 papers 的交集）约 300 万。
+数据包括摘要与论文元数据，不是 PDF 正文语料。数据许可、论文权利与项目代码许可分别适用；请查阅数据集页面及上游数据使用条件。
 
-所有文件均为 **JSON Lines (JSONL)**，每行一条 JSON 记录，经 gzip 压缩。
+## 2. 发布文件
 
----
+| 文件 | 约大小（十进制） | 部署用途 |
+| --- | --- | --- |
+| `papers.db` | 20.4 GB | 必需：SQLite 元数据、引用关系、ID 映射与两个 FTS5 索引 |
+| `current_release.txt` | 11 B | 必需：当前 S2 release，增量下载以此为起点 |
+| `qdrant_storage.tar.gz` | 15.2 GB | dense/hybrid 必需：Qdrant Server 存储归档 |
+| `embeddings.tar.gz` | 6.5 GB | 可选：预计算向量中间产物；正常恢复 Qdrant 后无需下载 |
+| `auth.db` | 16 KB | 不用于新部署；每个部署创建自己的 API Key 数据库 |
+| `papers.db-wal`、`papers.db-shm` | 发布时附件 | SQLite WAL / 共享内存文件，见下文 |
 
-## 2. 各表结构
+尺寸来自当前发布文件元信息，不是解压后的运行空间。必需下载约 35.6 GB，请为解压、模型、备份和更新额外预留磁盘。
 
-### 2.1 paper-ids（论文 ID 映射）
+## 3. 下载
 
-```json
-{
-  "sha": "af1b1c80730c83390340c39db88aa93997662c2a",
-  "corpusid": 99745734,
-  "primary": true
-}
+推荐 ModelScope SDK 选择所需文件，下载到暂存目录：
+
+```bash
+python -m pip install modelscope
+python - <<'PY'
+from modelscope.hub.snapshot_download import dataset_snapshot_download
+
+dataset_snapshot_download(
+    dataset_id='flappybear80/lewen-corpus',
+    revision='master',
+    local_dir='./downloads/lewen-corpus',
+    allow_file_pattern=[
+        'papers.db', 'current_release.txt', 'qdrant_storage.tar.gz',
+    ],
+)
+PY
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `sha` | string | 论文的 SHA 哈希（对应 API 的 paperId） |
-| `corpusid` | int | S2 Corpus ID |
-| `primary` | bool | 是否为该论文的主版本 |
+只使用 SQLite 接口时，可从列表移除 `qdrant_storage.tar.gz`。需要中间向量产物时，另行加入 `embeddings.tar.gz`。不要使用全量下载结果中的 `auth.db` 初始化自己的服务。
 
----
+也可以在数据集的“数据集文件”页面手动下载相同文件。大文件使用 Git LFS，普通 `git clone` 未安装 LFS 时得到的可能只是指针文件；不能把指针当作数据库或压缩包。
 
-### 2.2 papers（论文元数据）
+SDK 参数依据 [ModelScope 下载实现](https://github.com/modelscope/modelscope/blob/master/modelscope/hub/snapshot_download.py)。需要可复现部署时，记录下载 revision 和文件 SHA-256，并使用数据集页面公布的 SHA-256 核对本地文件：
 
-```json
-{
-  "corpusid": 9139823,
-  "externalids": {"MAG": "...", "PubMed": "...", "DOI": "...", ...},
-  "url": "https://www.semanticscholar.org/paper/...",
-  "title": "Interpersonal issues in prescribing medication.",
-  "authors": [{"authorId": "38540751", "name": "M. París"}],
-  "venue": "Archives of General Psychiatry",
-  "publicationvenueid": "...",
-  "year": 1982,
-  "referencecount": 0,
-  "citationcount": 0,
-  "influentialcitationcount": 0,
-  "isopenaccess": false,
-  "s2fieldsofstudy": [{"category": "Medicine", "source": "s2-fos-model"}, ...],
-  "publicationtypes": ["LettersAndComments"],
-  "publicationdate": "1982-02-01",
-  "journal": {"name": "...", "pages": "...", "volume": "..."}
-}
+```bash
+# Linux
+sha256sum downloads/lewen-corpus/papers.db downloads/lewen-corpus/qdrant_storage.tar.gz
+# macOS
+shasum -a 256 downloads/lewen-corpus/papers.db downloads/lewen-corpus/qdrant_storage.tar.gz
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `corpusid` | int | 论文 Corpus ID |
-| `externalids` | object | 外部 ID（MAG、PubMed、DOI、ArXiv 等） |
-| `title` | string | 标题 |
-| `authors` | array | 作者列表，含 `authorId` 和 `name` |
-| `venue` | string | 发表场所（会议/期刊名） |
-| `year` | int | 发表年份 |
-| `referencecount` | int | 参考文献数量 |
-| `citationcount` | int | 被引次数 |
-| `s2fieldsofstudy` | array/null | 研究领域 |
-| `publicationtypes` | array/null | 出版类型 |
-| `publicationdate` | string/null | 发表日期 |
-| `journal` | object/null | 期刊信息 |
+### SQLite WAL 注意事项
 
----
+本次核对的 `papers.db-wal` 大小为 0，所以上述首次安装命令仅取 `papers.db`。若未来发布的 WAL 非空，必须确认发布者已提供同一一致性快照的数据库与 WAL，或已完成 checkpoint 的独立数据库；不能丢弃非空 WAL。`-shm` 是运行时共享内存文件，关闭连接后可重建，不作为可移植语料安装文件。
 
-### 2.3 abstracts（摘要）
+不要在服务运行时覆盖 SQLite 文件或混入其他版本的 WAL/SHM。替换已有语料时，先暂停 API、管理员更新任务及 Qdrant，再备份完整旧数据，在新的空目录准备匹配版本的 SQLite、Qdrant 与 release 文件，验收后切换；保留自己的 `auth.db`。
 
-```json
-{
-  "corpusid": 265224679,
-  "openaccessinfo": {
-    "disclaimer": "...",
-    "externalids": {"Medline": "...", "DOI": "...", "PubMedCentral": "...", ...},
-    "license": "CCBY",
-    "url": null,
-    "status": "GOLD"
-  },
-  "abstract": "Introduction Understanding speech in a noisy environment..."
-}
+## 4. 安装与检查
+
+以下命令仅用于没有旧运行数据的首次部署，执行时 API 与 Qdrant 应处于停止状态：
+
+```bash
+mkdir -p corpus
+cp downloads/lewen-corpus/papers.db corpus/papers.db
+cp downloads/lewen-corpus/current_release.txt corpus/current_release.txt
+tar -tzf downloads/lewen-corpus/qdrant_storage.tar.gz | head -20
+tar -xzf downloads/lewen-corpus/qdrant_storage.tar.gz -C corpus
+cat corpus/current_release.txt
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `corpusid` | int | 论文 Corpus ID |
-| `openaccessinfo` | object | 开放获取信息（来源、DOI、许可证等） |
-| `abstract` | string | 摘要正文 |
+当前归档含顶层 `qdrant_storage/`，解压后的路径应为：
 
----
-
-### 2.4 citations（引用关系）
-
-```json
-{
-  "citationid": 2407430849,
-  "citingcorpusid": 147294757,
-  "citedcorpusid": 1138704,
-  "isinfluential": false,
-  "contexts": ["...引用上下文文本..."],
-  "intents": [["background"], null]
-}
+```text
+corpus/
+├── papers.db
+├── current_release.txt
+├── qdrant_storage/
+│   └── collections/
+│       └── papers/       # 必须验收此集合；归档可能还包含其他集合
+└── auth.db              # 本部署生成，不从开放语料复制
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `citationid` | int | 引用记录 ID |
-| `citingcorpusid` | int | 引用方论文的 Corpus ID |
-| `citedcorpusid` | int | 被引用论文的 Corpus ID |
-| `isinfluential` | bool | 是否为高影响力引用 |
-| `contexts` | array/null | 引用上下文文本列表 |
-| `intents` | array/null | 引用意图（如 background、methodology 等） |
+检查 SQLite 完整性和表结构（大库检查可能耗时）：
 
----
-
-### 2.5 authors（作者）
-
-```json
-{
-  "authorid": "2174269421",
-  "externalids": {"DBLP": ["Wanying Guo"], "ORCID": null},
-  "url": "https://www.semanticscholar.org/author/2174269421",
-  "name": "Wanying Guo",
-  "aliases": null,
-  "affiliations": null,
-  "homepage": null,
-  "papercount": 16,
-  "citationcount": 129,
-  "hindex": 5
-}
+```bash
+python - <<'PY'
+import sqlite3
+with sqlite3.connect('file:corpus/papers.db?mode=ro', uri=True) as db:
+    print('integrity:', db.execute('PRAGMA quick_check').fetchall())
+    names = {r[0] for r in db.execute("SELECT name FROM sqlite_master")}
+    required = {'paper_metadata', 'citations', 'corpus_id_mapping',
+                'arxiv_to_paper', 'paper_fts_title', 'paper_fts_combined'}
+    print('missing tables:', sorted(required - names))
+    print('sample:', db.execute('SELECT paper_id, title FROM paper_metadata LIMIT 1').fetchone())
+PY
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `authorid` | string | 作者 ID |
-| `externalids` | object | 外部 ID（DBLP、ORCID 等） |
-| `name` | string | 作者姓名 |
-| `aliases` | array/null | 别名 |
-| `papercount` | int | 论文数量 |
-| `citationcount` | int | 被引次数 |
-| `hindex` | int | h 指数 |
+启动 Qdrant 后还要检查 `GET http://localhost:6333/collections/papers`，确认 `papers` 存在、向量维度为 1024，并进行实际 hybrid 搜索。归档前部可见其他 collection，不能因此判断论文集合已经正确恢复。当前数据集卡片未说明构建 Qdrant 的确切版本，需在恢复时核对服务端日志与存储兼容性。
 
----
+## 5. SQLite 逻辑结构
 
-## 3. papers.json 与各表的关系
+| 表 | 作用 | 主要字段 |
+| --- | --- | --- |
+| `paper_metadata` | 论文元数据与摘要 | `paper_id`、`corpus_id`、`title`、`abstract`、`year`、`authors_json`、`external_ids_json` 等 |
+| `corpus_id_mapping` | S2 Corpus ID → SHA | `corpus_id`、`paper_id` |
+| `arxiv_to_paper` | arXiv ID → SHA | `arxiv_id`、`paper_id` |
+| `citations` | 有向引用边 | `citation_id`、`citing_corpus_id`、`cited_corpus_id` |
+| `paper_fts_title` | 标题 BM25 检索 | `paper_id`、`title` |
+| `paper_fts_combined` | 标题与摘要 BM25 检索 | `paper_id`、`title_abstract` |
 
-### 3.1 数据来源说明
+`paper_id` 为 Semantic Scholar 的 SHA 标识；`corpus_id` 为整数 Corpus ID。元数据字段在 API 层转换为 `paperId`、`citationCount`、`externalIds` 等响应字段，详见 [API 参考](api-zh.md)。引用表不保存 contexts、intents 或 isInfluential，不能从该发布库还原这些字段。
 
-当前项目中的 `build_corpus/data/papers.json` 由 **S2 API** 生成（早期 `crawl_papers.py` 调用 `/paper/search`），并非直接从 PaperData 转换而来。
+Qdrant 的 `papers` 集合使用 1024 维 Cosine 向量，文本为 `title + abstract`，payload 包含 `paper_id`；其余元数据回查 SQLite。
 
-但从数据模型角度看，papers.json 的字段等价于以下三张表的合并结果。
+## 6. S2 原始数据与增量文件
 
-### 3.2 三表合并构成 papers.json
+原始 S2 数据和本项目运行数据是不同层次：
 
-| 表 | 贡献的字段 |
-|----|------------|
-| **paper-ids** | `sha` → papers.json 的 `paperId` |
-| **papers** | `title`, `authors`, `venue`, `year`, `referencecount`, `citationcount`, `s2fieldsofstudy`, `publicationtypes`, `publicationdate`, `externalids`, `journal` 等 |
-| **abstracts** | `abstract`, `openaccessinfo`（对应 `openAccessPdf`） |
+| S2 数据集 | 内容 | 当前增量处理 |
+| --- | --- | --- |
+| `paper-ids` | Corpus ID 与 SHA 映射 | 更新映射、处理删除 |
+| `papers` | 标题、作者、年份、外部 ID 等 | 更新元数据 |
+| `abstracts` | 摘要与开放获取信息 | 更新摘要与语料成员 |
+| `citations` | 引用方与被引方 Corpus ID | 更新语料内部引用边 |
+| `authors` | 作者档案 | 下载，但不参与当前 SQLite/FTS/Qdrant 合并 |
 
-三张表通过 **`corpusid`** 关联，合并后得到完整的论文对象。
-
-### 3.3 独立的两张表
-
-| 表 | 作用 |
-|----|------|
-| **citations** | 引用关系：`citingcorpusid` → `citedcorpusid`，与论文元数据分开存储 |
-| **authors** | 作者档案：`authorid`, `name`, `papercount`, `citationcount`, `hindex` 等，是作者维度的补充信息 |
-
-- **papers** 表内已有 `authors: [{authorId, name}]`，表示每篇论文的作者列表
-- **authors** 表是作者维度的扩展信息，需要时通过 `authorId` 关联
-
-### 3.4 结构示意
-
-```
-papers.json  ≈  paper-ids ⋈ papers ⋈ abstracts   (on corpusid)
-                      │
-citations  ───────────┼── 独立表，通过 corpusid 关联
-                      │
-authors  ─────────────┴── 独立表，通过 papers.authors[].authorId 关联
-```
-
-### 3.5 Corpus 约束与规模
-
-本项目仅构建以下约束下的 corpus：
-
-| 约束 | 说明 | 规模 |
-|------|------|------|
-| 有 abstract | 仅 abstracts 中的论文 | ~3–4 千万 |
-| 仅 arXiv | 仅 papers 中有 ArXiv ID 的论文 | ~300 万 |
-| 引用关系 | 仅 citing、cited 均在 arXiv 的边；`cited_corpus_id IS NULL` 不插入 | ~3000 万（按每篇 ~10 条估算） |
-
----
-
-## 4. 字段映射（PaperData → papers.json）
-
-| papers.json 字段 | PaperData 来源 |
-|------------------|----------------|
-| `paperId` | paper-ids.sha |
-| `externalIds.CorpusId` | papers.corpusid / paper-ids.corpusid |
-| `title` | papers.title |
-| `abstract` | abstracts.abstract |
-| `authors` | papers.authors |
-| `venue` | papers.venue |
-| `year` | papers.year |
-| `referenceCount` | papers.referencecount |
-| `citationCount` | papers.citationcount |
-| `fieldsOfStudy` | papers.s2fieldsofstudy |
-| `publicationTypes` | papers.publicationtypes |
-| `publicationDate` | papers.publicationdate |
-| `openAccessPdf` | abstracts.openaccessinfo |
-
----
-
-## 5. 读取示例
-
-```python
-import gzip
-import json
-
-# 读取 citations 示例
-with gzip.open("PaperData/citations/0.gz", "rt", encoding="utf-8") as f:
-    for i, line in enumerate(f):
-        if i >= 3:
-            break
-        record = json.loads(line)
-        print(record["citingcorpusid"], "->", record["citedcorpusid"])
-```
-
----
-
-## 6. 相关脚本
-
-| 脚本 | 作用 |
-|------|------|
-| `build_corpus/ingest_paper_metadata.py` | 从 PaperData 加载论文元数据，构建 SQLite |
-| `build_corpus/ingest_citations.py` | 将引用数据导入 SQLite 引用库 |
-| `build_corpus/encode_embeddings.py` | 编码论文向量并保存到 npz |
-| `build_corpus/load_embeddings_to_qdrant.py` | 从 npz 加载向量写入 Qdrant |
+增量文件为压缩 JSON Lines 等格式，保存在 `PaperData/incremental/{start}_to_{end}/`。首次部署无需下载原始全量 `PaperData`；日常更新参见 [增量更新指南](incremental-update.md)。历史文档中的 `build_corpus/` 未随本仓库发布，不作为部署步骤。

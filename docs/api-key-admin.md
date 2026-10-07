@@ -15,8 +15,8 @@ AUTH_ENABLED=true
 # 管理员 API 密钥（用于远程管理 Key，为空则管理员 API 不可用）
 ADMIN_SECRET=your-secret-here
 
-# 可选：Key 缓存 TTL，默认 300 秒
-# AUTH_CACHE_TTL=300
+# 可选：Key 缓存 TTL，默认 60 秒
+# AUTH_CACHE_TTL=60
 ```
 
 设置后重启 API 服务生效。
@@ -29,10 +29,10 @@ ADMIN_SECRET=your-secret-here
 
 ### 2.1 启动服务
 
-在项目根目录启动 Qdrant、Paper API 和管理员服务：
+先完成 [环境配置](setup.md) 和 [语料库安装](data.md)。在三个独立终端中分别启动 Qdrant、Paper API 和管理员服务（以下命令均为前台进程）：
 
 ```bash
-cd /data/wdy/Paper_Search_API
+cd /path/to/Lewen-API
 bash start_qdrant.sh
 bash start_api.sh
 bash start_admin.sh
@@ -48,7 +48,7 @@ bash start_admin.sh
 如果需要临时指定环境变量启动管理员服务：
 
 ```bash
-cd /data/wdy/Paper_Search_API
+cd /path/to/Lewen-API
 ADMIN_SECRET=your-secret-here \
 ADMIN_PORT=4100 \
 ADMIN_TARGET_API_BASE_URL=http://localhost:4000 \
@@ -165,7 +165,7 @@ python manage_keys.py list
 python manage_keys.py revoke --prefix "lw-a3f8c7e2"
 ```
 
-禁用后该 Key 立即无法使用（缓存 TTL 过期后生效，默认最长 5 分钟）。
+禁用操作会通知各 worker 清理缓存，通常在后续请求中生效；Key 缓存 TTL 默认为 60 秒。
 
 ### 3.4 重新启用 Key
 
@@ -188,7 +188,7 @@ python manage_keys.py delete --prefix "lw-a3f8c7e2"
 ### 4.1 创建 Key
 
 ```bash
-curl -X POST http://210.45.70.162:4000/admin/keys \
+curl -X POST http://localhost:4000/admin/keys \
   -H "X-Admin-Secret: your-secret-here" \
   -H "Content-Type: application/json" \
   -d '{"name": "用户A", "email": "a@example.com"}'
@@ -210,28 +210,28 @@ curl -X POST http://210.45.70.162:4000/admin/keys \
 ### 4.2 列出所有 Key
 
 ```bash
-curl http://210.45.70.162:4000/admin/keys \
+curl http://localhost:4000/admin/keys \
   -H "X-Admin-Secret: your-secret-here"
 ```
 
 ### 4.3 禁用 Key
 
 ```bash
-curl -X POST http://210.45.70.162:4000/admin/keys/lw-a3f8c7e2/revoke \
+curl -X POST http://localhost:4000/admin/keys/lw-a3f8c7e2/revoke \
   -H "X-Admin-Secret: your-secret-here"
 ```
 
 ### 4.4 重新启用 Key
 
 ```bash
-curl -X POST http://210.45.70.162:4000/admin/keys/lw-a3f8c7e2/activate \
+curl -X POST http://localhost:4000/admin/keys/lw-a3f8c7e2/activate \
   -H "X-Admin-Secret: your-secret-here"
 ```
 
 ### 4.5 删除 Key
 
 ```bash
-curl -X DELETE http://210.45.70.162:4000/admin/keys/lw-a3f8c7e2 \
+curl -X DELETE http://localhost:4000/admin/keys/lw-a3f8c7e2 \
   -H "X-Admin-Secret: your-secret-here"
 ```
 

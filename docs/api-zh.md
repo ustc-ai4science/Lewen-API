@@ -1,6 +1,8 @@
 # 乐问学术搜索 API 使用文档
 
-面向用户的 API 使用说明。
+面向用户的 API 使用说明。[项目文档](https://ustc-ai4science.github.io/Lewen-API/) · [开放语料库](https://www.modelscope.cn/datasets/flappybear80/lewen-corpus)。
+
+以下示例使用自部署的本地地址；调用其他部署时请替换为管理员提供的 Base URL。
 
 ---
 
@@ -21,24 +23,24 @@
 
 | 项目 | 说明 |
 |------|------|
-| **Base URL** | `http://210.45.70.162:4000` |
-| **认证** | 需要 API Key（见下方认证说明） |
+| **Base URL** | `http://localhost:4000` |
+| **认证** | `AUTH_ENABLED=true` 时需要 API Key |
 | **Content-Type** | `application/json` |
 
 ### 2.1 认证
 
-所有 `/paper/*` 接口需要通过 API Key 认证。通过以下方式之一传递：
+自部署默认 `AUTH_ENABLED=false`，无需 API Key。启用 `AUTH_ENABLED=true` 后，所有 `/paper/*` 接口需要通过 API Key 认证。通过以下方式之一传递：
 
 **方式一：请求头（推荐）**
 
 ```bash
-curl -H "X-API-Key: lw-your-api-key" "http://210.45.70.162:4000/paper/search?query=transformer"
+curl -H "X-API-Key: lw-your-api-key" "http://localhost:4000/paper/search?query=transformer"
 ```
 
 **方式二：查询参数**
 
 ```bash
-curl "http://210.45.70.162:4000/paper/search?query=transformer&apiKey=lw-your-api-key"
+curl "http://localhost:4000/paper/search?query=transformer&apiKey=lw-your-api-key"
 ```
 
 **Python 示例**
@@ -47,13 +49,13 @@ curl "http://210.45.70.162:4000/paper/search?query=transformer&apiKey=lw-your-ap
 import requests
 
 headers = {"X-API-Key": "lw-your-api-key"}
-r = requests.get("http://210.45.70.162:4000/paper/search",
+r = requests.get("http://localhost:4000/paper/search",
                   params={"query": "transformer"},
                   headers=headers)
 print(r.json())
 ```
 
-如需申请 API Key，请通过邮件联系我们。
+自部署用户可通过 `python manage_keys.py create --name "local-user" --email "user@example.com"` 创建 Key；使用他人的部署时向该部署管理员申请。见 [部署指南](deployment.md)。
 
 !!! warning "请妥善保管 API Key"
     API Key 在创建时仅展示一次，服务器端不保留明文。如果遗失，无法找回，只能重新申请。
@@ -115,16 +117,16 @@ print(r.json())
 
 ```bash
 # 混合检索（默认）
-curl "http://210.45.70.162:4000/paper/search?query=transformer%20attention&limit=5"
+curl "http://localhost:4000/paper/search?query=transformer%20attention&limit=5"
 
 # 稀疏检索（无 GPU 时使用）
-curl "http://210.45.70.162:4000/paper/search?query=transformer&retrieval=sparse&limit=10"
+curl "http://localhost:4000/paper/search?query=transformer&retrieval=sparse&limit=10"
 
 # 带过滤条件
-curl "http://210.45.70.162:4000/paper/search?query=BERT&year=2018-2020&minCitationCount=100&fields=abstract,year,authors"
+curl "http://localhost:4000/paper/search?query=BERT&year=2018-2020&minCitationCount=100&fields=abstract,year,authors"
 
 # 返回全部元数据（fields=* 或 fields=all）
-curl "http://210.45.70.162:4000/paper/search?query=BERT&fields=*&limit=5"
+curl "http://localhost:4000/paper/search?query=BERT&fields=*&limit=5"
 ```
 
 **Python**
@@ -132,7 +134,7 @@ curl "http://210.45.70.162:4000/paper/search?query=BERT&fields=*&limit=5"
 ```python
 import requests
 
-BASE = "http://210.45.70.162:4000"
+BASE = "http://localhost:4000"
 
 # 混合检索（默认）
 r = requests.get(f"{BASE}/paper/search", params={"query": "transformer attention", "limit": 5})
@@ -209,7 +211,7 @@ r = requests.get(f"{BASE}/paper/search", params={"query": "BERT", "fields": "*",
 **curl**
 
 ```bash
-curl "http://210.45.70.162:4000/paper/search/title?query=Attention%20is%20all%20you%20need&limit=5"
+curl "http://localhost:4000/paper/search/title?query=Attention%20is%20all%20you%20need&limit=5"
 ```
 
 **Python**
@@ -217,7 +219,7 @@ curl "http://210.45.70.162:4000/paper/search/title?query=Attention%20is%20all%20
 ```python
 import requests
 
-r = requests.get("http://210.45.70.162:4000/paper/search/title", params={
+r = requests.get("http://localhost:4000/paper/search/title", params={
     "query": "Attention is all you need",
     "limit": 5,
 })
@@ -252,13 +254,13 @@ print(r.json())
 
 ```bash
 # 使用 arXiv ID
-curl "http://210.45.70.162:4000/paper/2309.06180"
+curl "http://localhost:4000/paper/2309.06180"
 
 # 使用 SHA 并指定返回字段
-curl "http://210.45.70.162:4000/paper/83b90f4a0ae4cc214eb3cc140ccfef9cd99fac05?fields=abstract,year,authors"
+curl "http://localhost:4000/paper/83b90f4a0ae4cc214eb3cc140ccfef9cd99fac05?fields=abstract,year,authors"
 
 # 返回全部元数据
-curl "http://210.45.70.162:4000/paper/83b90f4a0ae4cc214eb3cc140ccfef9cd99fac05?fields=*"
+curl "http://localhost:4000/paper/83b90f4a0ae4cc214eb3cc140ccfef9cd99fac05?fields=*"
 ```
 
 **Python**
@@ -266,7 +268,7 @@ curl "http://210.45.70.162:4000/paper/83b90f4a0ae4cc214eb3cc140ccfef9cd99fac05?f
 ```python
 import requests
 
-BASE = "http://210.45.70.162:4000"
+BASE = "http://localhost:4000"
 
 # 使用 arXiv ID
 r = requests.get(f"{BASE}/paper/2309.06180")
@@ -330,7 +332,7 @@ r = requests.get(f"{BASE}/paper/83b90f4a0ae4cc214eb3cc140ccfef9cd99fac05", param
 **curl**
 
 ```bash
-curl "http://210.45.70.162:4000/paper/1706.03762/citations?limit=10"
+curl "http://localhost:4000/paper/1706.03762/citations?limit=10"
 ```
 
 **Python**
@@ -338,7 +340,7 @@ curl "http://210.45.70.162:4000/paper/1706.03762/citations?limit=10"
 ```python
 import requests
 
-r = requests.get("http://210.45.70.162:4000/paper/1706.03762/citations", params={"limit": 10})
+r = requests.get("http://localhost:4000/paper/1706.03762/citations", params={"limit": 10})
 print(r.json())
 ```
 
@@ -375,7 +377,7 @@ print(r.json())
 **curl**
 
 ```bash
-curl "http://210.45.70.162:4000/paper/1706.03762/references?limit=10"
+curl "http://localhost:4000/paper/1706.03762/references?limit=10"
 ```
 
 **Python**
@@ -383,7 +385,7 @@ curl "http://210.45.70.162:4000/paper/1706.03762/references?limit=10"
 ```python
 import requests
 
-r = requests.get("http://210.45.70.162:4000/paper/1706.03762/references", params={"limit": 10})
+r = requests.get("http://localhost:4000/paper/1706.03762/references", params={"limit": 10})
 print(r.json())
 ```
 

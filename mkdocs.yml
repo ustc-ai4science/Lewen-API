@@ -1,7 +1,7 @@
 site_name: 乐问学术搜索 API
 site_description: Lewen — 学术论文搜索 API 文档
-site_url: https://ustclewen.github.io/Lewen-API/
-repo_url: https://github.com/USTCLewen/Lewen-API
+site_url: https://ustc-ai4science.github.io/Lewen-API/
+repo_url: https://github.com/ustc-ai4science/Lewen-API
 repo_name: Lewen-API
 
 theme:
@@ -64,9 +64,11 @@ nav:
   - API 文档:
       - API 参考 (中文): api-zh.md
       - API Reference (EN): api-en.md
-  - 开发指南:
+  - 部署与数据:
+      - 本地配置: setup.md
+      - API 部署: deployment.md
       - 技术架构: architecture.md
-      - 数据集结构: data.md
+      - 语料库下载与结构: data.md
       - 增量更新: incremental-update.md
   - 运维经验:
       - 管理员运维指南: api-key-admin.md

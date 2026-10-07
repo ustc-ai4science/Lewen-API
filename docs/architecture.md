@@ -1,390 +1,114 @@
 # 技术架构与项目结构
 
-## 1. 系统概述
+## 1. 定位与数据边界
 
-乐问学术搜索 API（Lewen），基于 S2 PaperData（2026-01-27 全量快照）构建，支持增量更新，提供 RESTful 接口。
+Lewen 是学术论文检索与查询后端。服务从本地发布语料读取论文元数据、摘要、ID 映射和语料内部引用边，为上层应用提供 REST API。当前语料成员为具有摘要的 arXiv 论文，不是 Semantic Scholar 全站数据，也不包含 PDF 正文。
 
-### 核心能力
+首次部署从 [ModelScope](https://www.modelscope.cn/datasets/flappybear80/lewen-corpus) 获取已经构建的 SQLite 与 Qdrant 数据；`corpus/current_release.txt` 标识本地数据的 S2 release。历史全量构建脚本 `build_corpus/` 不随本仓库发布，不能作为安装前提。
 
-| API | 路径 | 说明 |
-|-----|------|------|
-| 论文搜索 | `GET /paper/search` | 稀疏 / 稠密 / 混合检索，仅返回 arXiv 论文 |
-| 标题检索 | `GET /paper/search/title` | 基于与查询最接近的标题匹配检索论文 |
-| 论文详情 | `GET /paper/{paper_id}` | 按 SHA / arXiv ID / Corpus ID / arXiv URL 查询，仅支持 arXiv 论文 |
-| 引用列表 | `GET /paper/{paper_id}/citations` | 引用该论文的论文列表（仅 arXiv 内部） |
-| 参考文献 | `GET /paper/{paper_id}/references` | 该论文引用的论文列表（仅 arXiv 内部） |
+## 2. 请求路径
 
----
-
-## 2. 技术选型
-
-| 组件 | 选型 | 说明 |
-|------|------|------|
-| Web 框架 | **FastAPI** + uvicorn | 异步 HTTP，自带 `/docs` OpenAPI 文档 |
-| 关系数据 | **SQLite**（WAL 模式） | 单文件零配置，存放 paper_metadata、citations、ID 映射 |
-| 全文检索 | **SQLite FTS5** | 内置 BM25 排序，替代 rank_bm25 内存方案 |
-| 向量检索 | **Qdrant** | 高性能向量数据库，binary 部署 |
-| Embedding | **BGE-M3**（1024 维） | 编码 title + abstract，GPU 推理 |
-| 混合排序 | **RRF**（Reciprocal Rank Fusion） | 融合 FTS5 + Qdrant 结果 |
-
-### 检索模式（`/paper/search` 的 `retrieval` 参数）
-
-| 值 | 说明 | GPU 依赖 |
-|----|------|----------|
-| `sparse` | 仅 paper_fts_combined BM25（title+abstract） | 无 |
-| `dense` | 仅 Qdrant 向量 | 需要 |
-| `hybrid`（默认） | FTS5 + Qdrant + RRF 融合 | 需要 |
-
----
-
-## 3. 数据规模
-
-| 数据 | 规模 | 说明 |
-|------|------|------|
-| paper_metadata | ~300 万 | 仅 arXiv + abstract 的论文 |
-| arXiv 论文 | ~300 万 | 与 paper_metadata 一致，FTS5 + Qdrant 索引 |
-| 引用关系 | ~3000 万 | 仅 citing、cited 均在 arXiv 的边（按每篇 ~10 条估算） |
-
----
-
-## 4. 数据库设计
-
-所有关系数据存于 `corpus/papers.db`（单一 SQLite 文件）。
-
-### 4.1 paper_metadata
-
-存储仅 arXiv 且有 abstract 的论文元数据，由 paper-ids ⋈ papers ⋈ abstracts（按 corpusid 关联）合并而成，约束为 abstracts 中有记录且 papers 中有 ArXiv ID。
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| paper_id | TEXT PK | SHA（来自 paper-ids.primary） |
-| corpus_id | INTEGER UNIQUE | S2 CorpusId |
-| title | TEXT | |
-| abstract | TEXT | |
-| year | INTEGER | |
-| venue | TEXT | |
-| citation_count | INTEGER | |
-| reference_count | INTEGER | |
-| authors_json | TEXT | JSON 数组 |
-| fields_of_study_json | TEXT | JSON 数组 |
-| publication_types_json | TEXT | JSON 数组 |
-| publication_date | TEXT | |
-| open_access_pdf_json | TEXT | JSON 对象 |
-| external_ids_json | TEXT | JSON 对象（含 ArXiv、DOI 等） |
-| journal_json | TEXT | JSON 对象 |
-
-### 4.2 citations（仅 3 列）
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| citation_id | INTEGER PK | |
-| citing_corpus_id | INTEGER NOT NULL | 引用方 |
-| cited_corpus_id | INTEGER | 被引方（可为 NULL） |
-
-仅保留 citing、cited 均在 corpus（arXiv）的边；`cited_corpus_id IS NULL` 的边不插入。
-
-索引：`cited_corpus_id`、`citing_corpus_id`。
-
-### 4.3 corpus_id_mapping
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| corpus_id | INTEGER PK | |
-| paper_id | TEXT NOT NULL | SHA |
-
-### 4.4 arxiv_to_paper
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| arxiv_id | TEXT PK | 归一化（如 `2309.06180`，去掉版本号） |
-| paper_id | TEXT NOT NULL | SHA |
-
-### 4.5 paper_fts_title（FTS5 虚拟表）
-
-```sql
-CREATE VIRTUAL TABLE paper_fts_title USING fts5(paper_id, title);
+```text
+HTTP request
+  → FastAPI 路由 + 可选 API Key 认证
+  → 论文 ID 解析 / Retriever / 引用查询
+      ├─ sparse / title → FTS5 batcher → SQLite BM25
+      ├─ dense → BGE-M3 embedding batcher → Qdrant
+      └─ hybrid → sparse + dense → RRF 融合
+  → SQLite 元数据回查与过滤
+  → 字段筛选、分页、JSON response
 ```
 
-自包含表，仅索引 title，供 `/paper/search/title` 使用。
+| 组件 | 职责 |
+| --- | --- |
+| FastAPI + Uvicorn | 异步 HTTP、OpenAPI、worker 进程管理 |
+| SQLite + 数据库池 | 元数据、ID 映射、引用关系查询 |
+| FTS5 | `paper_fts_title` 与 `paper_fts_combined` 的 BM25 检索 |
+| BGE-M3 | 查询与增量论文编码，1024 维 dense vector，当前使用 CUDA |
+| Qdrant Server | `papers` collection，Cosine 检索，payload 为 `paper_id` |
+| 批处理队列 | 合并编码与检索请求，降低单请求调度开销 |
+| RRF | 融合 sparse / dense 排名 |
 
-### 4.6 paper_fts_combined（FTS5 虚拟表）
+`retrieval=hybrid` 为默认模式。`sparse` 不执行查询编码，但启动过程仍会尝试预热模型与 Qdrant。预热失败被记录后不一定阻止 API 启动，部署时必须用实际 hybrid 请求验收。
 
-```sql
-CREATE VIRTUAL TABLE paper_fts_combined USING fts5(paper_id, title_abstract);
+## 3. 存储模型
+
+所有关系数据与 FTS5 索引位于 `corpus/papers.db`：
+
+| 表 | 作用 |
+| --- | --- |
+| `paper_metadata` | `paper_id`（SHA）、`corpus_id`、标题、摘要、年份及 JSON 元数据字段 |
+| `corpus_id_mapping` | S2 Corpus ID → SHA |
+| `arxiv_to_paper` | arXiv ID → SHA |
+| `citations` | `citation_id`、`citing_corpus_id`、`cited_corpus_id` |
+| `paper_fts_title` | 标题索引 |
+| `paper_fts_combined` | `title + abstract` 索引 |
+
+Qdrant 使用 `corpus/qdrant_storage/` 服务端存储目录。论文向量文本同样为 `title + abstract`，只将论文标识写入 payload，其余信息回查 SQLite。发布包可能含其他 collection，服务仅使用 `papers`，其维度与模型必须匹配。
+
+鉴权数据保存在本部署生成的 `corpus/auth.db`，与开放论文语料分开。详情字段与数据结构参见 [语料库指南](data.md)。
+
+## 4. ID 解析与响应
+
+`core/paper_id_resolver.py` 将不同格式解析为 SHA：
+
+| 输入 | 示例 |
+| --- | --- |
+| SHA | 40 位十六进制论文标识 |
+| arXiv ID | `2309.06180`、`2309.06180v1` |
+| Corpus ID | `215416146`、`CorpusId:215416146` |
+| arXiv URL | `https://arxiv.org/abs/2309.06180` |
+
+响应的分页字段为 `total`、`offset`、`next` 和 `data`。检索的 `total` 是候选集经过过滤后的数量，不是对全部语料的精确命中计数。引用返回 `citingPaper`，参考文献返回 `citedPaper`；当前数据库不保留 contexts、intents、isInfluential。具体接口契约见 [API 参考](api-zh.md)。
+
+## 5. 增量链路
+
+```text
+S2 Datasets API diffs
+  → download.py：下载 / 续传
+  → validate.py：文件完整性校验 / 重下
+  → sqlite_fts_merge.py：SQLite + FTS5 upsert / delete
+      → _qdrant_task.json
+  → qdrant_encode.py：按分片进行 BGE-M3 编码
+      → qdrant_embeddings/*.npz
+  → qdrant_load.py：Qdrant delete / upsert
+  → update_qdrant_incremental.sh：推进 current_release.txt
 ```
 
-自包含表，索引 title+abstract 拼接后的文本，供 `/paper/search` sparse/hybrid 使用。与 Qdrant 建库逻辑一致（`f"{title} {abstract}"`）。
+SQLite 合并进度与 Qdrant 任务独立维护。更新不是跨 SQLite 与 Qdrant 的原子事务，只有所有编码分片与入库均完成后才能声明新版本。手动入库不会自动写 release 标记。详见 [增量更新指南](incremental-update.md)。
 
-### 4.7 Qdrant（`corpus/qdrant_storage/`）
+## 6. 项目目录
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| paper_id | payload string | SHA |
-| dense_vector | FLOAT[1024] | BGE-M3 编码 title+abstract |
-
-Cosine 度量。仅存 arXiv 论文。通过独立的 Qdrant 服务端进程提供检索。
-
----
-
-## 5. paper_id 多格式解析
-
-API 中所有 `paper_id` 参数支持以下输入格式，由 `core/paper_id_resolver.py` 统一解析为 SHA：
-
-| 输入格式 | 示例 | 解析方式 |
-|----------|------|----------|
-| SHA | `83b90f4a0ae4cc214eb3cc140ccfef9cd99fac05` | 40 位十六进制，直接查 paper_metadata |
-| arXiv ID | `2309.06180`、`2309.06180v1` | 归一化后查 arxiv_to_paper |
-| Corpus ID | `215416146`、`CorpusId:215416146` | 查 corpus_id_mapping |
-| arXiv URL | `https://arxiv.org/abs/2309.06180` | 提取 arXiv ID，再查 arxiv_to_paper |
-
-解析优先级：URL → Corpus ID → arXiv ID → SHA。
-
----
-
-## 6. 构建流程
-
-```
-Phase 1 ─ ingest_paper_metadata.py
-  abstracts/*.gz ──→ abstracts_corpus_ids（有 abstract 的 corpus_id）
-  paper-ids/*.gz ──→ 仅保留 abstracts 中的 corpus_id → sha
-  papers/*.gz ────→ paper_metadata, corpus_id_mapping, arxiv_to_paper（仅 arXiv + abstract）
-
-Phase 2 ─ ingest_citations.py
-  citations/*.gz ──→ citations（3 列，仅 citing、cited 均在 arXiv 的边）
-
-Phase 3 ─ 两步：编码 + 入库
-  Step 1: encode_embeddings.py（4 卡并行，GPU 1,2,3,4）
-    paper_metadata ──→ BGE-M3 encode ──→ corpus/embeddings/embeddings_shard_*.npz
-  Step 2: load_embeddings_to_qdrant.py
-    embeddings_shard_*.npz ──→ Qdrant
-
-Phase 4a ─ ingest_fts_title.py
-  paper_metadata（筛选 arXiv）──→ paper_fts_title
-
-Phase 4b ─ ingest_fts_combined.py
-  paper_metadata（筛选 arXiv）──→ paper_fts_combined（title+abstract 拼接）
-
-Phase 5 ─ incremental 五段式流程
-  Step 5-1: incremental/download.py
-    下载增量 diff
-  Step 5-2: incremental/validate.py
-    校验 diff 并重下坏文件
-  Step 5-3: incremental/sqlite_fts_merge.py
-    PaperData/incremental/*/updates,deletes ──→ SQLite + FTS5
-  Step 5-4: incremental/qdrant_encode.py
-    _qdrant_task.json ──→ 多卡增量 embedding shard
-  Step 5-5: incremental/qdrant_load.py
-    incremental_embeddings_shard_*.npz ──→ Qdrant
+```text
+Lewen-API/
+├── api/                 # 论文与管理路由、看板
+├── auth/                # Key 数据库、Key 管理、认证中间件
+├── core/
+│   ├── retrieve/        # 编码、FTS5、Qdrant、RRF 与批处理队列
+│   ├── citation/        # 引用关系查询
+│   ├── db_pool.py       # SQLite 连接池
+│   ├── paper_id_resolver.py
+│   └── admin_jobs.py    # 管理后台任务
+├── incremental/         # 下载、校验、合并、编码、入库脚本
+├── config/qdrant_config.yaml
+├── docs/                # MkDocs 源文档
+├── test/                # 接口测试、压测与增量测试
+├── corpus/              # 运行数据，不入 Git
+├── PaperData/           # 增量原始文件，不入 Git
+├── config.py
+├── .env.example
+├── main.py
+├── admin_main.py
+├── manage_keys.py
+└── start_*.sh
 ```
 
-### 构建命令
+## 7. 部署约束
 
-**Phase 1 先执行，Phase 2-1/2-2/2-3 可并行**
+- CUDA / BGE-M3 只服务于 dense/hybrid 与增量编码；CPU 环境可先验证 SQLite 查询。
+- 每个 Uvicorn worker 独立加载模型，先从单 worker 起步。
+- Qdrant Server 目录归档不能直接作为嵌入式 `QDRANT_PATH` 数据库。
+- 端口监听成功不代表模型、集合和索引已通过验收。
+- 资源估算应依据实际发布包与并发；旧全量原始快照的大小和建库耗时不作为当前部署承诺。
 
-```bash
-# Phase 1: 元数据（后续所有步骤的基础）
-bash build_corpus/build_1_paper_metadata.sh        # 约 1.5–3 h
-
-# Phase 2-1/2-2/2-3: 互相无依赖，可并行
-bash build_corpus/build_2-1_citations.sh            # 引用关系，约 0.5–1.5 h
-bash build_corpus/build_2-2_vectors.sh              # 向量编码 + 入库，约 0.5–1.5 h
-bash build_corpus/build_2-3_fts.sh                  # FTS5 全文索引，约 10–30 min
-```
-
-**直接调用 Python（调试用）**
-
-```bash
-python build_corpus/ingest_paper_metadata.py
-python build_corpus/ingest_citations.py
-# Phase 2-2: 两步（4 卡并行编码）
-bash build_corpus/build_2-2_vectors.sh
-# 或手动分步：
-# python build_corpus/encode_embeddings.py --gpu 1 --shard 0 --total-shards 4 &
-# python build_corpus/encode_embeddings.py --gpu 2 --shard 1 --total-shards 4 &
-# python build_corpus/encode_embeddings.py --gpu 3 --shard 2 --total-shards 4 &
-# python build_corpus/encode_embeddings.py --gpu 4 --shard 3 --total-shards 4 &
-# wait
-# python build_corpus/load_embeddings_to_qdrant.py --drop
-python build_corpus/ingest_fts_title.py --rebuild
-python build_corpus/ingest_fts_combined.py --rebuild
-
-# Phase 5: 增量更新（按需）
-bash incremental/update_download.sh 2026-02-24
-bash incremental/update_validate.sh 2026-02-24
-bash incremental/update_merge.sh PaperData/incremental/2026-01-27_to_2026-02-24
-bash incremental/update_qdrant_incremental.sh PaperData/incremental/2026-01-27_to_2026-02-24 0,2,3
-```
-
-### 启动 API 服务
-
-```bash
-python main.py
-# 或
-uvicorn main:app --host 0.0.0.0 --port 4000
-```
-
----
-
-## 7. 资源估算
-
-### 7.1 存储
-
-| 组件 | 估算 |
-|------|------|
-| PaperData 原始（gz） | ~50 GB |
-| papers.db（paper_metadata + corpus_id_mapping + citations + FTS5） | ~8 GB |
-| qdrant_storage（仅 arXiv） | ~11 GB |
-| **合计** | **~70 GB** |
-
-### 7.2 首次构建
-
-| Phase | 预估 | 瓶颈 |
-|-------|------|------|
-| 1. paper_metadata | 1–2 h | I/O + SQLite 写入 |
-| 2. citations | 0.5–1.5 h | I/O + 批量 insert（已过滤） |
-| 3. 向量（4 卡并行） | 0.5–1 h | BGE-M3 GPU 编码 |
-| 4. FTS5 | 0.1–0.3 h | SQLite 建索引 |
-| **合计** | **2–5 h** | |
-
-### 7.3 运行时
-
-| 资源 | 建议 | 说明 |
-|------|------|------|
-| 磁盘 | 70 GB（只读访问 corpus/） | |
-| 内存 | 16–32 GB | BGE-M3 ~2–4 GB；SQLite 缓存；Qdrant 检索 |
-| GPU | 1 张，8 GB | query embedding（sparse 模式无需 GPU） |
-| CPU | 4–8 核 | HTTP + SQLite + Qdrant 查询 |
-
----
-
-## 8. 增量更新
-
-基于 S2 Datasets API 的 incremental diffs，按主键执行 upsert / delete：
-
-| 数据集 | 主键 | 操作 |
-|--------|------|------|
-| papers | corpusid | upsert / delete |
-| abstracts | corpusid | upsert / delete |
-| paper-ids updates | corpusid | upsert |
-| paper-ids deletes | sha | delete |
-| citations | citationid | upsert / delete |
-
-详见 [incremental-update.md](incremental-update.md)。
-
----
-
-## 9. 项目目录结构
-
-```
-Paper_Search_API/
-├── api/                             # FastAPI 路由（统一前缀 /paper）
-│   ├── __init__.py
-│   ├── paper.py                     # GET /paper/search
-│   ├── paper_detail.py              # GET /paper/{id}
-│   └── paper_citations.py           # GET /paper/{id}/citations, /references
-├── core/                            # 核心逻辑
-│   ├── __init__.py
-│   ├── paper_id_resolver.py         # 多格式 paper_id 解析
-│   ├── citation/                    # 引用查询（SQLite）
-│   │   ├── __init__.py
-│   │   ├── database.py              # 建表、insert、查询
-│   │   └── lookup.py                # citations/references 查询接口
-│   └── retrieve/                    # 检索引擎
-│       ├── __init__.py
-│       ├── sparse.py                # FTS5 稀疏检索（paper_fts_title、paper_fts_combined）
-│       ├── dense.py                  # Qdrant 稠密向量检索
-│       ├── embedding.py             # BGE-M3 编码
-│       └── retriever.py              # sparse/dense/hybrid 统一入口
-├── build_corpus/                    # 数据构建脚本
-│   ├── ingest_paper_metadata.py     # Phase 1: paper_metadata + 映射表
-│   ├── ingest_citations.py          # Phase 2: citations
-│   ├── encode_embeddings.py         # Phase 3 Step 1: 编码并保存到 npz
-│   ├── load_embeddings_to_qdrant.py # Phase 3 Step 2: 从 npz 加载写入 Qdrant
-│   ├── ingest_fts_title.py          # Phase 4a: paper_fts_title
-│   ├── ingest_fts_combined.py      # Phase 4b: paper_fts_combined
-│   ├── optimize_fts.py              # FTS5 索引优化
-├── incremental/                     # 增量更新流水线
-│   ├── download.py                  # 下载增量 diff
-│   ├── validate.py                  # 校验增量 diff
-│   ├── sqlite_fts_merge.py          # SQLite + FTS 增量合并
-│   ├── qdrant_manifest.py           # 生成 _qdrant_task.json
-│   ├── qdrant_encode.py             # 多卡增量 embedding
-│   ├── qdrant_load.py               # 写入 Qdrant
-│   └── update.sh                    # 一键增量更新入口
-├── corpus/                          # 运行时数据（构建后生成）
-│   ├── papers.db                    # SQLite: 所有表 + FTS5
-│   ├── qdrant_storage/              # Qdrant 向量存储
-│   └── embeddings/                  # Phase 3 中间文件（embeddings_shard_*.npz）
-├── PaperData/                       # 原始数据（S2 全量快照）
-│   ├── paper-ids/
-│   ├── papers/
-│   ├── abstracts/
-│   ├── citations/
-│   └── incremental/                 # 增量 diff（按需下载）
-├── docs/                            # 项目文档
-│   ├── architecture.md              # 本文件
-│   ├── data.md                      # 数据集结构说明
-│   └── incremental-update.md        # 增量更新指南
-├── archive/                         # 归档：小规模 dev 阶段内容
-├── config.py                        # 全局配置
-├── main.py                          # FastAPI 入口
-├── schemas.py                       # Pydantic 模型 & 字段过滤
-├── requirements.txt
-└── .env                             # S2_API_KEY 等环境变量
-```
-
----
-
-## 10. API 响应格式
-
-### /paper/search
-
-```json
-{
-  "total": 42,
-  "offset": 0,
-  "next": 10,
-  "data": [
-    {
-      "paperId": "83b90f4a...",
-      "title": "Attention Is All You Need",
-      "abstract": "...",
-      "year": 2017,
-      "authors": [{"authorId": "...", "name": "..."}],
-      ...
-    }
-  ]
-}
-```
-
-### /paper/{id}/citations
-
-```json
-{
-  "total": 1024,
-  "offset": 0,
-  "next": 10,
-  "data": [
-    {
-      "citingPaper": {
-        "paperId": "...",
-        "title": "..."
-      }
-    }
-  ]
-}
-```
-
-**注意**：因不存储 `contexts`、`intents`、`isInfluential`，这些字段直接省略，不返回空值。
-
----
-
-## 11. FTS5 维护
-
-布尔检索与稀疏检索依赖 `paper_fts_title`、`paper_fts_combined`。定期执行 optimize 可合并内部 b-tree 段，提升查询性能：
-
-```bash
-python build_corpus/optimize_fts.py
-```
-
-建议在批量导入后或每周执行一次。
+部署方式与检查命令见 [本地配置](setup.md) 和 [API 部署](deployment.md)。

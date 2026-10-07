@@ -1,271 +1,147 @@
 # 增量更新指南
 
-本文档说明当前项目如何通过新的 `incremental/` 目录执行增量更新。  
-现在的设计原则是：
+首次部署使用 [ModelScope 发布语料](data.md)。已有语料通过 Semantic Scholar Datasets API 拉取 diffs，依次更新 SQLite、FTS5 和 Qdrant，无需重新下载全量原始数据。
 
-- 下载、校验、SQLite/FTS、Qdrant 编码、Qdrant 入库彻底拆开
-- `_merge_progress.json` 只属于 SQLite/FTS merge
-- Qdrant 使用独立的 `_qdrant_task.json`
-- 根目录旧增量脚本已移除，统一使用 `incremental/` 下的新入口
+增量更新不是从 ModelScope 自动同步新快照。若选择替换为更新的完整发布包，按 [语料库指南](data.md) 停服、备份和成套替换，不与下面的增量流程混用。
 
----
+## 1. 前置条件
 
-## 1. 执行方式
+- 已安装 `requests`：`python -m pip install requests`。
+- `.env` 已配置可访问 S2 Datasets API 的 `S2_API_KEY`。
+- `corpus/current_release.txt` 包含本地 SQLite 与 Qdrant 实际对应的 S2 release；使用下载的标记，不自行填写今天日期。
+- Qdrant Server 已启动，`papers` 集合可查询；增量编码使用已配置的 BGE-M3 和 CUDA GPU。
+- 目标 release 晚于本地版本，源 release 到目标 release 的 diffs 仍可由上游取得。
+- 已备份匹配版本的 SQLite、Qdrant 与 release 标记，预留下载、临时文件与向量分片空间。
 
-```bash
-# 一键执行：下载 -> 校验 -> SQLite/FTS -> Qdrant 任务 -> Qdrant 入库
-bash incremental/update.sh
+流程分阶段写入，SQLite 合并与 Qdrant 入库不是跨系统原子事务。严格一致性场景请在维护窗口暂停 API 查询和其他更新任务。不要并发运行两条更新链。
 
-# 指定目标 release
-bash incremental/update.sh 2026-03-10
+## 2. 单卡推荐流程
 
-# 分步执行（五段）
-bash incremental/update_download.sh 2026-03-10
-bash incremental/update_validate.sh 2026-03-10
-bash incremental/update_merge.sh PaperData/incremental/2026-01-27_to_2026-03-10
-python incremental/qdrant_encode.py PaperData/incremental/2026-01-27_to_2026-03-10 --gpu 0 --shard 0 --total-shards 3
-python incremental/qdrant_load.py PaperData/incremental/2026-01-27_to_2026-03-10
-```
-
-推荐顺序：
-
-1. 网络不稳定时先执行 `incremental/update_download.sh`
-2. 文件下完后执行 `incremental/update_validate.sh`
-3. 执行 `incremental/update_merge.sh` 完成 SQLite + FTS，并生成 `_qdrant_task.json`
-4. 执行 `incremental/qdrant_encode.py` 完成多卡 embedding 编码
-5. 执行 `incremental/qdrant_load.py` 将 embedding 写入 Qdrant
-
-### 前置条件
-
-- `corpus/current_release.txt` 存在且包含当前 release 日期
-- `.env` 中配置了 `S2_API_KEY`
-- Qdrant 服务运行中
-- 至少一张可用 GPU；多卡编码时可传入例如 `0,2,3`
-
----
-
-## 2. 五段职责
-
-### 2.1 下载
-
-入口：
+以下变量与命令在**同一个 Bash 会话**中执行。示例日期不代表最新 release，应按实际版本替换。
 
 ```bash
-bash incremental/update_download.sh 2026-03-10
-python incremental/download.py --start 2026-01-27 --end 2026-03-10
+bash
+TARGET=2026-04-07  # 替换为期望日期，或 latest
+START=$(tr -d '[:space:]' < corpus/current_release.txt)
+cat corpus/current_release.txt
+bash incremental/update_download.sh "$TARGET"
 ```
 
-职责：
+下载脚本会输出类似：
 
-- 调用 S2 incremental diffs API
-- 在 `PaperData/incremental/{start}_to_{end}/` 下创建增量目录
-- 文件存在即跳过
-- 如果存在 `.tmp` 文件，则继续断点续传
-- 不做完整 gzip/UTF-8 校验
+```text
+📦 END_RELEASE=2026-04-07
+📦 INCR_DIR=.../PaperData/incremental/2026-03-10_to_2026-04-07
+```
 
-### 2.2 校验
+**以实际输出为准**：日期目标会解析为不晚于目标的最近可用 release，`latest` 会解析为具体日期。若输出 Already up to date，则无需合并。
 
-入口：
+复制真实的 `END_RELEASE` 与 `INCR_DIR`，再执行：
 
 ```bash
-bash incremental/update_validate.sh 2026-03-10
-python incremental/validate.py --start 2026-01-27 --end 2026-03-10
+END_RELEASE=2026-04-07  # 替换为实际 END_RELEASE
+INCR_DIR="PaperData/incremental/${START}_to_${END_RELEASE}"
+
+bash incremental/update_validate.sh "$END_RELEASE"
+bash incremental/update_merge.sh "$INCR_DIR"
+bash incremental/update_qdrant_incremental.sh "$INCR_DIR" 0
 ```
 
-职责：
+最后的参数 `0` 表示用 GPU 0 编码一个完整分片；多卡可写 `0,2,3`。GPU 列表是脚本第二个位置参数，不能仅通过 `.env` 的 `GPU_DEVICE_ID` 改写该列表。
 
-- 完整校验 `.gz/.jsonl`
-- 对缺失或损坏文件重新下载
-- 维护 `INCR_DIR/_download_validation_progress.json`
-
-### 2.3 SQLite + FTS
-
-入口：
+若编码显存不足，可以减小批大小：
 
 ```bash
-bash incremental/update_merge.sh PaperData/incremental/2026-01-27_to_2026-03-10
-python incremental/sqlite_fts_merge.py PaperData/incremental/2026-01-27_to_2026-03-10
+QDRANT_INCREMENTAL_ENCODE_BATCH_SIZE=16 \
+  bash incremental/update_qdrant_incremental.sh "$INCR_DIR" 0
 ```
 
-职责：
+默认批大小为 64。重试同一任务时保持 GPU / shard 划分一致，不要复用不匹配的历史分片。
 
-- 处理 `paper-ids` / `papers` / `abstracts` / `citations`
-- 写 SQLite
-- 刷新 FTS5
-- 维护 `INCR_DIR/_merge_progress.json`
-- 完成后生成 `INCR_DIR/_qdrant_task.json`
-- 不直接执行 Qdrant
-- 不更新 `corpus/current_release.txt`
-
-### 2.4 Qdrant embedding
-
-入口：
+## 3. 一键入口
 
 ```bash
-python incremental/qdrant_manifest.py PaperData/incremental/2026-01-27_to_2026-03-10
-python incremental/qdrant_encode.py PaperData/incremental/2026-01-27_to_2026-03-10 --gpu 0 --shard 0 --total-shards 3
+bash incremental/update.sh latest
+# 或指定日期
+bash incremental/update.sh 2026-04-07
 ```
 
-职责：
+顺序为下载 → 校验 → SQLite/FTS 合并 → Qdrant 编码 → Qdrant 入库。
 
-- 读取 `_qdrant_task.json`
-- 严格按当前 `arxiv_to_paper` 过滤
-- 多卡并行编码增量向量
-- 输出到：
-  - `INCR_DIR/qdrant_embeddings/incremental_embeddings_shard_{i}.npz`
+**当前一键入口调用 Qdrant 脚本时不传 GPU 列表，使用默认的 `0,2,3` 三张卡。** 仅在这些卡都可用时使用；单卡部署使用上一节分步流程。
 
-### 2.5 Qdrant load
+## 4. 每个阶段做什么
 
-入口：
+| 阶段 | 入口 | 输出 / 状态 |
+| --- | --- | --- |
+| 下载 | `update_download.sh` / `download.py` | `PaperData/incremental/{start}_to_{end}/` 下的 diff 文件 |
+| 校验 | `update_validate.sh` / `validate.py` | 完整 gzip/UTF-8 检查，重下坏文件，维护 `_download_validation_progress.json` |
+| SQLite/FTS 合并 | `update_merge.sh` / `sqlite_fts_merge.py` | 更新元数据、映射、引用和 FTS；生成 `_qdrant_task.json` |
+| 编码 | `qdrant_encode.py` | `qdrant_embeddings/incremental_embeddings_shard_{i}.npz` |
+| Qdrant 入库 | `qdrant_load.py` | 先 delete 再 upsert，成功后标记 `task_status.loaded` |
+
+`authors` 会下载，但不参与当前 SQLite/FTS/Qdrant 合并。下载器看到目标文件已存在会跳过，临时 `.tmp` 文件支持续传；下载完成不等于完整性校验通过，不能跳过校验阶段。
+
+### 手动编码与入库
+
+通常使用 `update_qdrant_incremental.sh` 自动执行；调试时可拆开。单卡示例：
 
 ```bash
-python incremental/qdrant_load.py PaperData/incremental/2026-01-27_to_2026-03-10
+python incremental/qdrant_encode.py "$INCR_DIR" \
+  --gpu 0 --shard 0 --total-shards 1
+python incremental/qdrant_load.py "$INCR_DIR"
 ```
 
-职责：
+多卡时必须为 `0..total_shards-1` 每个 shard 完成一次编码。仅执行 `--shard 0 --total-shards 3` 只编码约三分之一的输入，不是完整更新。当前 loader 按目录中实际存在的 NPZ 入库，**不要把 loaded 标记当成所有计划分片都已到齐的证明**，应同时核对编码日志和 `encoded_shards`。
 
-- 只读取 `_qdrant_task.json`
-- 先做 delete，再 upsert embedding shard
-- 成功后把 `_qdrant_task.json` 标记为 loaded
-- 如果 embedding 已经算完，可以单独重复执行这一阶段
-- 由 `incremental/update_qdrant_incremental.sh` 在整条链成功后更新 `corpus/current_release.txt`
-
----
-
-## 3. 关键状态文件
-
-### `_download_validation_progress.json`
-
-位置：
-
-- `PaperData/incremental/.../_download_validation_progress.json`
-
-作用：
-
-- 仅供校验阶段使用
-- 记录哪些 diff 文件已经完整校验通过
-
-### `_merge_progress.json`
-
-位置：
-
-- `PaperData/incremental/.../_merge_progress.json`
-
-作用：
-
-- 仅供 SQLite/FTS merge 使用
-- 只记录：
-  - `completed_steps`
-  - `step_offsets`
-- 不再包含任何 Qdrant 待办集合
-
-### `_qdrant_task.json`
-
-位置：
-
-- `PaperData/incremental/.../_qdrant_task.json`
-
-作用：
-
-- 供 Qdrant 流水线使用
-- 记录：
-  - `upsert_corpus_ids`
-  - `delete_paper_ids`
-  - `task_status`
-  - `summary`
-
-### `corpus/current_release.txt`
-
-位置：
-
-- `corpus/current_release.txt`
-
-作用：
-
-- 表示当前系统对外声明的 corpus release 版本
-- 下载阶段会把它作为 `start_release`
-- 后续增量目录命名也依赖它，例如：
-  - `PaperData/incremental/2026-01-27_to_2026-03-10`
-
-维护规则：
-
-- `incremental/update_merge.sh` 完成后不要更新它
-- 只有在 Qdrant delete + upsert 全部成功后，才更新它
-- 原因是：
-  - SQLite + FTS 完成，不代表整条增量链完成
-  - 只有 Qdrant 也完成，检索链路才是完整一致的新版本
-
-更新方式：
-
-- 使用一键 Qdrant 入口时：
-  - `bash incremental/update_qdrant_incremental.sh ...`
-  - 会自动更新 `corpus/current_release.txt`
-- 如果你是手动执行：
-  - `python incremental/qdrant_encode.py ...`
-  - `python incremental/qdrant_load.py ...`
-  - 那么在 `qdrant_load.py` 成功后，需要手动执行：
+手动调用 `qdrant_load.py` 不更新 `current_release.txt`。确认所有计划分片完成、delete/upsert 成功并完成下面的验收后，才手动写入实际目标 release：
 
 ```bash
-echo 2026-03-10 > corpus/current_release.txt
+printf '%s\n' "$END_RELEASE" > corpus/current_release.txt
 ```
 
-日常建议：
+使用 `update_qdrant_incremental.sh` 则会在其编码 / 入库流程成功结束后自动写入；仍须检查是否有 GPU 子进程报错及分片遗漏。
 
-- 把 `current_release.txt` 当成“整条增量链是否完成”的最终标记
-- 不要因为 SQLite 已完成就提前改它
-- 若中途失败，保留旧 release 更安全，下一次增量仍能基于真实已完成版本继续
+## 5. 状态文件与版本规则
 
----
+| 文件 | 意义 |
+| --- | --- |
+| `_download_validation_progress.json` | 已完整校验的 diff 文件 |
+| `_merge_progress.json` | SQLite/FTS 的 `completed_steps` 与 `step_offsets`，用于续跑 |
+| `_qdrant_task.json` | `upsert_corpus_ids`、`delete_paper_ids`、`task_status` 与摘要 |
+| `qdrant_embeddings/*.checkpoint` | 编码断点，保留后可继续同一分片 |
+| `corpus/current_release.txt` | 对外声明的数据版本，也是下一次下载的起点 |
 
-## 4. 任务生成规则
+**只完成 SQLite/FTS 时不能推进 release。** 必须等 Qdrant 更新完整成功。发布标记也不是数据备份；出错时修改标记不会撤销数据库写入。
 
-`incremental/qdrant_manifest.py` 会按当前 SQLite 状态重新生成 Qdrant 任务：
+## 6. 失败恢复
 
-- `papers/updates`
-  - 只保留 diff 里带 `ArXiv/arXiv`
-  - 且当前 `paper_id` 仍属于 `arxiv_to_paper`
-- `abstracts/updates`
-  - 只保留当前 `paper_id` 仍属于 `arxiv_to_paper`
-- `paper-ids/papers/abstracts deletes`
-  - 只保留当前 arXiv 论文对应的删除项
+| 失败位置 | 处理方法 |
+| --- | --- |
+| 网络下载中断 | 用相同源版本与目标版本重跑下载，继续 `.tmp` 或跳过已存在文件 |
+| gzip / UTF-8 校验失败 | 重跑校验，确认坏文件已重新下载并验证 |
+| SQLite/FTS 合并中断 | 保留 `_merge_progress.json`，对相同 `INCR_DIR` 重跑 merge |
+| GPU 编码失败 | 修正模型路径、GPU 编号或批大小，对同一任务和相同分片划分重跑 Qdrant 阶段 |
+| Qdrant 入库失败 | 确认服务正常与分片完整后，重跑 `python incremental/qdrant_load.py "$INCR_DIR"`；按手动流程处理版本标记 |
+| 需要回滚 | 停服后成套恢复更新前的 SQLite、Qdrant 和 release，而非只改日期 |
 
-这一步替代了旧版本中把 Qdrant 待办直接塞进 `_merge_progress.json` 的做法。
+不要随意删除任务、进度或 checkpoint 文件。历史状态修复工具 `rebuild_qdrant_progress.py` 不属于日常更新步骤，使用前应检查实际数据状态。
 
----
+## 7. 更新后验收
 
-## 5. 主键说明
+```bash
+cat corpus/current_release.txt
+curl --fail http://localhost:6333/collections/papers
 
-| 数据集 | 主键字段 |
-|------|------|
-| `papers` | `corpusid` |
-| `abstracts` | `corpusid` |
-| `paper-ids updates` | `corpusid` |
-| `paper-ids deletes` | `sha` |
-| `authors` | `authorid` |
-| `citations` | `citationid` |
+python - "$INCR_DIR" <<'PY'
+import json, sys
+from pathlib import Path
+task = json.loads((Path(sys.argv[1]) / '_qdrant_task.json').read_text())
+print('task_status:', task.get('task_status'))
+print('summary:', task.get('summary'))
+PY
+```
 
----
+核对目标 release、所有编码分片与 loaded 状态，检查增量日志中没有失败，再通过 [部署指南](deployment.md) 的 sparse、hybrid、详情及引用请求验证服务。若更新期间暂停了 API，应在恢复后验收。
 
-## 6. 相关文件
-
-| 路径 | 作用 |
-|------|------|
-| `incremental/download.py` | 下载增量 diff |
-| `incremental/validate.py` | 校验增量 diff |
-| `incremental/sqlite_fts_merge.py` | SQLite + FTS 增量 merge |
-| `incremental/qdrant_manifest.py` | 生成 `_qdrant_task.json` |
-| `incremental/qdrant_encode.py` | 多卡编码增量向量 |
-| `incremental/qdrant_load.py` | 将增量向量写入 Qdrant |
-| `incremental/rebuild_qdrant_progress.py` | 历史修复工具：重建 `_qdrant_task.json` |
-| `incremental/update.sh` | 一键增量更新 |
-
----
-
-## 7. 注意事项
-
-- `authors` 仍然只下载，不参与当前 SQLite/FTS/Qdrant 增量链路。
-- SQLite + FTS 成功不代表整个增量完成；还需要 Qdrant 步骤。
-- `corpus/current_release.txt` 只会在 `incremental/update_qdrant_incremental.sh` 成功后更新。
-- 若你手动执行 `qdrant_load.py`，记得在成功后手动更新 `corpus/current_release.txt`。
-- 如果只想重复 Qdrant，不需要重跑 SQLite/FTS；直接使用已有的 `_qdrant_task.json` 即可。
-- `incremental/rebuild_qdrant_progress.py` 仅用于修复历史脏状态，不属于日常标准步骤。
+SQLite 与 Qdrant 的论文 ID 应保持对应关系，但引用边数量、collection 点数、FTS 行数不是同一种计数，不能简单要求全部相等。
